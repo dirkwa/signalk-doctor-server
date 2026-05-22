@@ -1,7 +1,7 @@
 version: 2
 updates:
   - package-ecosystem: npm
-    directory: "/"
+    directory: '/'
     schedule:
       interval: weekly
     groups:
@@ -14,11 +14,11 @@ updates:
       # lowest supported runtime (Node 22 per package.json engines) so
       # types reflect what's actually available on every supported version.
       # Allow updates within the v22.x line; ignore v23+.
-      - dependency-name: "@types/node"
-        versions: [">=23"]
+      - dependency-name: '@types/node'
+        versions: ['>=23']
 
   - package-ecosystem: github-actions
-    directory: "/"
+    directory: '/'
     schedule:
       interval: weekly
     groups:
