@@ -19,7 +19,13 @@ const SYSD = {
 function sessionBus(): ReturnType<typeof dbus.sessionBus> {
   const addr = process.env.DBUS_SESSION_BUS_ADDRESS;
   if (!addr) throw new Error('DBUS_SESSION_BUS_ADDRESS not set');
-  return dbus.sessionBus({ busAddress: addr });
+  // Force EXTERNAL auth only. The library's default fallback chain attempts
+  // DBUS_COOKIE_SHA1 which stat()s /root/.dbus-keyrings; on a distroless
+  // Chainguard image that directory does not exist and the resulting
+  // ENOENT propagates as an uncaught 'error' event that kills the Node
+  // process. EXTERNAL is the only method that works for a socket bind-
+  // mount anyway (the kernel passes uid via SCM_CREDENTIALS).
+  return dbus.sessionBus({ busAddress: addr, authMethods: ['EXTERNAL'] });
 }
 
 interface Invoker {
