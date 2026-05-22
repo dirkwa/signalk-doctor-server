@@ -1,12 +1,19 @@
 # syntax=docker/dockerfile:1.7
+#
+# Base: cgr.dev/chainguard/node:latest (Wolfi, glibc, daily CVE rebuilds).
+#
+# Why Wolfi over Alpine: musl libc has bitten Node native modules (dbus-native
+# pulls bindings). Wolfi is glibc-based, security-first, and the `latest` tag
+# is free to pull without authentication.
+#
+# Why Wolfi over Debian Trixie: same glibc, smaller image (~110MB vs ~140MB),
+# and the CVE-rebuild cadence is meaningful for a boat computer that may run
+# unattended for weeks. Host parity is preserved at the glibc level, which is
+# what matters for native bindings.
 
-FROM node:24-alpine AS deps
-WORKDIR /app
-COPY package.json ./
-# package-lock.json is not committed (~/.npmrc disables it); use install + omit dev for runtime image.
-RUN npm install --omit=dev --no-audit --no-fund --loglevel=warn
-
-FROM node:24-alpine AS build
+# Builder stage: Chainguard's *-dev tag includes apk + a writable filesystem
+# for building TypeScript and installing npm deps.
+FROM cgr.dev/chainguard/node:latest-dev AS build
 WORKDIR /app
 COPY package.json ./
 RUN npm install --include=dev --no-audit --no-fund --loglevel=warn
@@ -14,15 +21,18 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npx tsc -p tsconfig.json
 
-FROM node:24-alpine AS runtime
+FROM cgr.dev/chainguard/node:latest-dev AS deps
+WORKDIR /app
+COPY package.json ./
+RUN npm install --omit=dev --no-audit --no-fund --loglevel=warn
+
+# Runtime stage: distroless-style Chainguard node image. Includes node + tini.
+FROM cgr.dev/chainguard/node:latest AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3004 \
     HOST=0.0.0.0 \
     LOG_LEVEL=info
-
-# Install tini for proper signal handling.
-RUN apk add --no-cache tini
 
 COPY --from=deps  /app/node_modules ./node_modules
 COPY --from=build /app/dist          ./dist
@@ -37,6 +47,5 @@ LABEL org.opencontainers.image.source="https://github.com/dirkwa/signalk-doctor-
       io.signalk.role="doctor" \
       io.signalk.persistent="true"
 
-USER node
-ENTRYPOINT ["/sbin/tini","--"]
-CMD ["node","dist/index.js"]
+# Chainguard's runtime image already runs as a non-root `node` user.
+CMD ["dist/index.js"]
