@@ -27,7 +27,7 @@ async function pickSocket(): Promise<string | null> {
   return null;
 }
 
-async function detectKind(client: Docker): Promise<RuntimeKind> {
+async function detectKind(client: Docker, socketPath: string): Promise<RuntimeKind> {
   try {
     const v = await client.version();
     const components = (v as { Components?: Array<{ Name?: string }> }).Components ?? [];
@@ -35,6 +35,14 @@ async function detectKind(client: Docker): Promise<RuntimeKind> {
     if (v.Platform?.Name && /podman/i.test(v.Platform.Name)) return 'podman';
     return 'docker';
   } catch {
+    // /version failed (commonly: socket exists but our uid can't read it).
+    // Fall back to a heuristic based on socket path: the rootless-podman
+    // socket lives under /run/user/<uid>/podman/, the system-wide podman
+    // socket under /run/podman/, and the Docker daemon's socket at
+    // /var/run/docker.sock. Reporting 'podman' here is informational —
+    // routes that actually need the API will still surface the error
+    // via the safe() wrapper.
+    if (/\/podman\/podman\.sock$/.test(socketPath)) return 'podman';
     return 'unknown';
   }
 }
@@ -43,7 +51,7 @@ export async function resolveRuntime(): Promise<ResolvedRuntime | null> {
   const socketPath = await pickSocket();
   if (!socketPath) return null;
   const client = new Docker({ socketPath });
-  const kind = await detectKind(client);
+  const kind = await detectKind(client, socketPath);
   return { client, socketPath, kind };
 }
 
