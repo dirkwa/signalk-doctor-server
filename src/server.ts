@@ -1,5 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { registerHealthRoutes } from './routes/health.js';
+import { registerProbeRoutes } from './routes/probes.js';
+import { registerRecoverRoutes } from './routes/recover.js';
 
 export async function createServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -9,6 +11,8 @@ export async function createServer(): Promise<FastifyInstance> {
   });
 
   await registerHealthRoutes(app);
+  await registerProbeRoutes(app);
+  await registerRecoverRoutes(app);
 
   return app;
 }
