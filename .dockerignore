@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.git/
+.github/
+*.log
+.DS_Store
+coverage/
+.env
+.env.local
+test/
+**/*.test.ts
+README.md
+AGENTS.md
+CLAUDE.md
+LICENSE
