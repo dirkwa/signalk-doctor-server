@@ -1,5 +1,12 @@
 name: Publish image
 
+# Pattern adapted from signalk-server-images: build amd64 + arm64 on
+# their native runners (no QEMU), push each by digest, then assemble a
+# multi-arch manifest list with `buildx imagetools create`. Native arm64
+# (ubuntu-24.04-arm) is dramatically faster than emulating arm64 on
+# amd64 via QEMU for any build that runs `npm install` against native
+# bindings (we have @homebridge/dbus-native).
+
 on:
   push:
     tags:
@@ -10,6 +17,9 @@ on:
 permissions:
   contents: write
   packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/signalk-doctor-server
 
 jobs:
   release:
@@ -29,40 +39,24 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  build-and-push:
-    runs-on: ubuntu-24.04
+  build:
     needs: release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runs-on: ubuntu-24.04
+            arch: amd64
+          - platform: linux/arm64
+            runs-on: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runs-on }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Compute image tags
-        id: tags
-        env:
-          REF_NAME: ${{ github.ref_name }}
-          IMG: ghcr.io/${{ github.repository_owner }}/signalk-doctor-server
-        run: |
-          set -euo pipefail
-          v="${REF_NAME#v}"
-          is_prerelease=0
-          [[ "$v" == *-beta.* ]] && is_prerelease=1
-          [[ "$v" == *-rc.* ]] && is_prerelease=1
-
-          tags=("$IMG:$v")
-          if (( is_prerelease )); then
-            tags+=("$IMG:beta")
-          else
-            # X.Y.Z → X.Y → X → latest
-            base="${v%%-*}"
-            major="${base%%.*}"
-            tmp="${base#*.}"
-            minor="${tmp%%.*}"
-            tags+=("$IMG:$major.$minor" "$IMG:$major" "$IMG:latest")
-          fi
-
-          printf 'tags=%s\n' "$(IFS=,; printf '%s' "${tags[*]}")" >> "$GITHUB_OUTPUT"
-
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -71,14 +65,91 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build + push (multi-arch)
+      - name: Build and push by digest
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: ${{ steps.tags.outputs.tags }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.version=${{ github.ref_name }}
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          echo "${{ steps.build.outputs.digest }}" > /tmp/digests/${{ matrix.arch }}
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/${{ matrix.arch }}
+          retention-days: 1
+
+  merge:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute tags
+        id: tags
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          v="${REF_NAME#v}"
+          tags=("${{ env.IMAGE }}:$v")
+          if [[ "$v" == *-beta.* || "$v" == *-rc.* ]]; then
+            tags+=("${{ env.IMAGE }}:beta")
+          else
+            base="${v%%-*}"
+            major="${base%%.*}"
+            tmp="${base#*.}"
+            minor="${tmp%%.*}"
+            tags+=("${{ env.IMAGE }}:$major.$minor" "${{ env.IMAGE }}:$major" "${{ env.IMAGE }}:latest")
+          fi
+          {
+            for t in "${tags[@]}"; do printf '%s\n' "$t"; done
+          } > /tmp/tags.txt
+          printf 'tag_args=%s\n' "$(printf -- '--tag %s ' "${tags[@]}")" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble manifest list
+        run: |
+          set -euo pipefail
+          AMD=$(cat /tmp/digests/digest-amd64/amd64)
+          ARM=$(cat /tmp/digests/digest-arm64/arm64)
+          echo "amd64 digest: $AMD"
+          echo "arm64 digest: $ARM"
+          docker buildx imagetools create \
+            ${{ steps.tags.outputs.tag_args }} \
+            ${{ env.IMAGE }}@${AMD} \
+            ${{ env.IMAGE }}@${ARM}
+
+      - name: Inspect result
+        run: |
+          set -euo pipefail
+          v="${{ github.ref_name }}"; v="${v#v}"
+          docker buildx imagetools inspect "${{ env.IMAGE }}:$v"
