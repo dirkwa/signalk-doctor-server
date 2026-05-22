@@ -1,19 +1,22 @@
 # syntax=docker/dockerfile:1.7
 #
-# Base: cgr.dev/chainguard/node:latest (Wolfi, glibc, daily CVE rebuilds).
+# Base: node:24-trixie-slim (Debian 13 + Node 24, official upstream).
 #
-# Why Wolfi over Alpine: musl libc has bitten Node native modules (dbus-native
-# pulls bindings). Wolfi is glibc-based, security-first, and the `latest` tag
-# is free to pull without authentication.
+# Why trixie-slim over the Chainguard Wolfi image:
+#   - Standard glibc userland — dbus-tools / systemd userspace are an
+#     apt-get away if we ever need them.
+#   - Runs as root by default; under rootless podman that maps to the
+#     host invoking user via userns, so the container can read the
+#     host-mode-0600 token file at /data/token without any User= dance
+#     in the Quadlet.
+#   - Trixie tracks the same release line as most boat hosts (Pi OS
+#     bookworm/trixie, Debian 13). Same kernel ABI, same libc, no
+#     userspace surprises.
 #
-# Why Wolfi over Debian Trixie: same glibc, smaller image (~110MB vs ~140MB),
-# and the CVE-rebuild cadence is meaningful for a boat computer that may run
-# unattended for weeks. Host parity is preserved at the glibc level, which is
-# what matters for native bindings.
+# Trade-off: ~210MB final image (vs ~110MB for Wolfi). Worth it for
+# the operational simplicity — no userns/auth/distroless puzzles.
 
-# Builder stage: Chainguard's *-dev tag includes apk + a writable filesystem
-# for building TypeScript and installing npm deps.
-FROM cgr.dev/chainguard/node:latest-dev AS build
+FROM node:24-trixie-slim AS build
 WORKDIR /app
 COPY package.json ./
 RUN npm install --include=dev --no-audit --no-fund --loglevel=warn
@@ -21,18 +24,27 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npx tsc -p tsconfig.json
 
-FROM cgr.dev/chainguard/node:latest-dev AS deps
+FROM node:24-trixie-slim AS deps
 WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev --no-audit --no-fund --loglevel=warn
 
-# Runtime stage: distroless-style Chainguard node image. Includes node + tini.
-FROM cgr.dev/chainguard/node:latest AS runtime
+FROM node:24-trixie-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production \
     PORT=3004 \
     HOST=0.0.0.0 \
     LOG_LEVEL=info
+
+# tini    — PID-1 signal handling.
+# ca-certificates — GHCR TLS.
+# systemd — provides `busctl` which we use to talk to the host user-bus
+#           for daemon-reload + unit start/stop/restart. We do NOT run
+#           systemd inside the container; we only use its client tool.
+# dbus    — libdbus client libs that busctl links against.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends tini ca-certificates systemd dbus \
+ && rm -rf /var/lib/apt/lists/*
 
 COPY --from=deps  /app/node_modules ./node_modules
 COPY --from=build /app/dist          ./dist
@@ -47,5 +59,5 @@ LABEL org.opencontainers.image.source="https://github.com/dirkwa/signalk-doctor-
       io.signalk.role="doctor" \
       io.signalk.persistent="true"
 
-# Chainguard's runtime image already runs as a non-root `node` user.
-CMD ["dist/index.js"]
+ENTRYPOINT ["/usr/bin/tini","--"]
+CMD ["node","dist/index.js"]
