@@ -22,6 +22,13 @@ declare module '@homebridge/dbus-native' {
 
   export interface BusOptions {
     busAddress?: string;
+    /**
+     * Authentication methods to attempt, in order. Default is
+     * ['EXTERNAL', 'DBUS_COOKIE_SHA1', 'ANONYMOUS']. Force EXTERNAL
+     * only when running in a distroless container that lacks
+     * /root/.dbus-keyrings.
+     */
+    authMethods?: Array<'EXTERNAL' | 'DBUS_COOKIE_SHA1' | 'ANONYMOUS'>;
   }
 
   export function sessionBus(opts?: BusOptions): DBusBus;
