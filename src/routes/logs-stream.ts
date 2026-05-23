@@ -36,12 +36,17 @@ function getHistory(name: string, tail: number): string[] {
 // created it stays for the lifetime of the engine.
 const warmedContainers = new Set<string>();
 
-function warmBroker(name: string, tail: number): void {
+function warmBroker(name: string): void {
   if (warmedContainers.has(name)) return;
   // Subscribe before marking warm: if getOrCreateBroker or subscribe
   // throws (e.g. runtime not reachable), we want the next call to
   // retry rather than silently leaving the container forever cold.
-  const broker = getOrCreateBroker(name, tail);
+  //
+  // The permanent subscriber always asks dockerode for the full
+  // ring-buffer worth of backfill. Otherwise a tail=10 first request
+  // would lock the buffer to 10 lines forever; subsequent SSE clients
+  // asking for tail=500 would still only see 10.
+  const broker = getOrCreateBroker(name, BACKFILL_LIMIT);
   broker.subscribe({
     onLine: (line) => pushHistory(name, line),
   });
@@ -69,7 +74,7 @@ export async function registerLogStreamRoutes(app: FastifyInstance): Promise<voi
       // Make sure the permanent history-capture subscriber is in place
       // before backfilling; otherwise a brand-new container would get
       // an empty backfill on first connect.
-      warmBroker(name, tail);
+      warmBroker(name);
 
       // Backfill from the in-memory history first so the client doesn't
       // see a blank pane while the broker primes its follow-stream.
@@ -129,7 +134,7 @@ export async function registerLogStreamRoutes(app: FastifyInstance): Promise<voi
       // The webapp renders an explicit "no log output yet — click
       // Stream to subscribe" hint in that case, so subsequent clicks
       // just work.
-      warmBroker(name, tail);
+      warmBroker(name);
       reply.type('text/plain; charset=utf-8').send(getHistory(name, tail).join('\n'));
       return reply;
     },
