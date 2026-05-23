@@ -260,22 +260,44 @@ function showConfirm({ title, body, okLabel = 'OK' }) {
     dialog.showModal();
     const ok = document.getElementById('confirm-ok');
     const cancel = document.getElementById('confirm-cancel');
+    // The HTMLDialogElement closes itself on Esc (and on a backdrop
+    // click in some browsers) without firing our button listeners.
+    // Without the dialog 'cancel'/'close' handlers below, that path
+    // would leave the Promise unresolved — and because we reuse the
+    // same dialog instance for every confirm, the next showConfirm
+    // call would hang silently. Track whether we've already settled
+    // and route every dismissal path through finish().
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(result);
+    };
     const onOk = () => {
       dialog.close();
-      cleanup();
-      resolve(true);
+      finish(true);
     };
     const onCancel = () => {
       dialog.close();
-      cleanup();
-      resolve(false);
+      finish(false);
     };
+    const onDialogCancel = (ev) => {
+      ev.preventDefault();
+      dialog.close();
+      finish(false);
+    };
+    const onDialogClose = () => finish(false);
     function cleanup() {
       ok.removeEventListener('click', onOk);
       cancel.removeEventListener('click', onCancel);
+      dialog.removeEventListener('cancel', onDialogCancel);
+      dialog.removeEventListener('close', onDialogClose);
     }
     ok.addEventListener('click', onOk);
     cancel.addEventListener('click', onCancel);
+    dialog.addEventListener('cancel', onDialogCancel);
+    dialog.addEventListener('close', onDialogClose);
   });
 }
 
