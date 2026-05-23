@@ -27,9 +27,14 @@ async function api(path, init = {}) {
   if (init.body && !(init.body instanceof FormData)) {
     headers.set('Content-Type', 'application/json');
   }
-  if (state.token) {
+  // Per CC-2: the doctor only requires auth on mutating endpoints
+  // (POST /api/recover*). Read-only probes stay unauthenticated by
+  // design — they are the recovery surface a desperate user reaches
+  // for. Attaching the bearer to GETs would just leak the token
+  // through proxy logs for no benefit.
+  const isMutating = typeof init.method === 'string' && init.method.toUpperCase() !== 'GET';
+  if (state.token && isMutating) {
     headers.set('Authorization', `Bearer ${state.token}`);
-    headers.set('X-SK-Auth', state.token);
   }
   const res = await fetch(path, { ...init, headers });
   if (res.status === 204) return null;
