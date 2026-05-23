@@ -6,6 +6,7 @@ import { registerHealthRoutes } from './routes/health.js';
 import { registerSessionRoutes } from './routes/session.js';
 import { registerProbeRoutes } from './routes/probes.js';
 import { registerRecoverRoutes } from './routes/recover.js';
+import { registerLogStreamRoutes } from './routes/logs-stream.js';
 
 // Webapp directory inside the container image. Build copies webapp/ to
 // /app/webapp; the env var lets dev mode point at the source tree.
@@ -23,6 +24,7 @@ export async function createServer(): Promise<FastifyInstance> {
   await registerSessionRoutes(app);
   await registerProbeRoutes(app);
   await registerRecoverRoutes(app);
+  await registerLogStreamRoutes(app);
 
   // Serve the webapp at /. Without this, opening the Doctor Console URL
   // in a browser hits Fastify's default 404 for GET / — confusing UX.
