@@ -13,6 +13,9 @@ const ROUTES = {
   lastGood: '/api/last-good',
   recover: '/api/recover',
   recoverUpdater: '/api/recover/updater',
+  logsStream: (name, tail) =>
+    `/api/containers/${encodeURIComponent(name)}/logs/stream?tail=${tail}`,
+  logsOnce: (name, tail) => `/api/containers/${encodeURIComponent(name)}/logs?tail=${tail}`,
 };
 
 const state = {
@@ -300,6 +303,181 @@ async function runRecover(path, label) {
   }
 }
 
+// ── Logs view ───────────────────────────────────────────
+//
+// Same broker-backed Logs experience as the Updater Console. Pulling
+// the doctor's own logs into the doctor surface is the whole point of
+// having this tab here — if recovery itself misbehaves, the doctor's
+// container logs are where the next clue lives, and getting at them
+// shouldn't require shelling into the host.
+let logsEventSource = null;
+
+const LEVEL_RX_PINO = /"level":(\d+)/;
+const PINO_LEVELS = { 10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal' };
+const LEVEL_RX_WORD = /\b(trace|debug|info|warn(?:ing)?|error|fatal)\b/i;
+const TS_RX_FRONT = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\s*/;
+const TS_RX_PINO = /"time":(\d{10,13})/;
+
+function parseLogLine(raw) {
+  if (!raw) return { time: null, level: '', message: '', raw };
+  if (raw.startsWith('{')) {
+    try {
+      const obj = JSON.parse(raw);
+      const lvlNum = obj.level;
+      const level = PINO_LEVELS[lvlNum] || (typeof lvlNum === 'string' ? lvlNum : '');
+      const time = obj.time ? new Date(Number(obj.time)).toISOString() : null;
+      const msg = obj.msg || obj.message || '';
+      const extras = Object.entries(obj)
+        .filter(([k]) => !['level', 'time', 'msg', 'message', 'hostname', 'pid', 'v'].includes(k))
+        .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`)
+        .join(' ');
+      return { time, level, message: extras ? `${msg} ${extras}` : msg, raw };
+    } catch {
+      // not JSON
+    }
+  }
+  let line = raw;
+  let time = null;
+  const tsMatch = line.match(TS_RX_FRONT);
+  if (tsMatch) {
+    time = tsMatch[1];
+    line = line.slice(tsMatch[0].length);
+  } else {
+    const pinoTs = line.match(TS_RX_PINO);
+    if (pinoTs) time = new Date(Number(pinoTs[1])).toISOString();
+  }
+  let level = '';
+  const lvlMatch = line.match(LEVEL_RX_WORD);
+  if (lvlMatch) level = lvlMatch[1].toLowerCase().replace('warning', 'warn');
+  if (!level) {
+    const num = line.match(LEVEL_RX_PINO);
+    if (num) level = PINO_LEVELS[Number(num[1])] || '';
+  }
+  return { time, level, message: line, raw };
+}
+
+function logLevelClass(level) {
+  if (level === 'error' || level === 'fatal') return 'log-err';
+  if (level === 'warn') return 'log-warn';
+  if (level === 'debug' || level === 'trace') return 'log-debug';
+  if (level === 'info') return 'log-info';
+  return 'log-plain';
+}
+
+function fmtLogTime(iso) {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso.slice(11, 19);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    const ss = String(d.getSeconds()).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  } catch {
+    return iso.slice(11, 19);
+  }
+}
+
+function isScrolledNearBottom(el) {
+  return el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+}
+
+function appendLogLine(out, raw) {
+  const wasAtBottom = isScrolledNearBottom(out);
+  const parsed = parseLogLine(raw);
+  const row = document.createElement('div');
+  row.className = `log-row ${logLevelClass(parsed.level)}`;
+  const time = parsed.time ? fmtLogTime(parsed.time) : '';
+  row.innerHTML = `<span class="log-time">${escapeHtml(time)}</span><span class="log-level">${escapeHtml(parsed.level || '')}</span><span class="log-msg">${escapeHtml(parsed.message)}</span>`;
+  out.appendChild(row);
+  while (out.children.length > 2000) out.removeChild(out.firstChild);
+  if (wasAtBottom) out.scrollTop = out.scrollHeight;
+}
+
+function clearLogs() {
+  const out = document.getElementById('logs-output');
+  out.innerHTML = '';
+}
+
+function stopLogsStream() {
+  if (logsEventSource) {
+    logsEventSource.close();
+    logsEventSource = null;
+  }
+  const btn = document.getElementById('logs-stream');
+  btn.textContent = 'Stream';
+  btn.classList.remove('btn-primary');
+  btn.classList.add('btn-ghost');
+}
+
+async function refreshLogs() {
+  stopLogsStream();
+  const lines = Number.parseInt(document.getElementById('logs-lines').value, 10) || 500;
+  const containerSel = document.getElementById('logs-container');
+  const name = containerSel ? containerSel.value : 'signalk-doctor-server';
+  const out = document.getElementById('logs-output');
+  clearLogs();
+  const status = document.createElement('div');
+  status.className = 'log-row log-plain';
+  status.textContent = `Loading last ${lines} lines from ${name}…`;
+  out.appendChild(status);
+  try {
+    const res = await fetch(ROUTES.logsOnce(name, lines));
+    const text = await res.text();
+    clearLogs();
+    if (!text) {
+      const empty = document.createElement('div');
+      empty.className = 'log-row log-plain';
+      empty.textContent = `(no log output yet for ${name} — click Stream to subscribe)`;
+      out.appendChild(empty);
+    } else {
+      for (const line of text.split('\n')) {
+        if (line) appendLogLine(out, line);
+      }
+      out.scrollTop = out.scrollHeight;
+    }
+  } catch (err) {
+    clearLogs();
+    const e = document.createElement('div');
+    e.className = 'log-row log-err';
+    e.textContent = `Failed to read logs: ${err.message}`;
+    out.appendChild(e);
+  }
+}
+
+function toggleLogsStream() {
+  if (logsEventSource) {
+    stopLogsStream();
+    return;
+  }
+  const containerSel = document.getElementById('logs-container');
+  const name = containerSel ? containerSel.value : 'signalk-doctor-server';
+  const tail = Number.parseInt(document.getElementById('logs-lines').value, 10) || 500;
+  const out = document.getElementById('logs-output');
+  clearLogs();
+  const es = new EventSource(ROUTES.logsStream(name, tail));
+  logsEventSource = es;
+  es.onmessage = (ev) => appendLogLine(out, ev.data);
+  es.addEventListener('end', (ev) => {
+    const note = document.createElement('div');
+    note.className = 'log-row log-plain';
+    note.textContent = `[stream ended: ${ev.data || 'closed'}]`;
+    out.appendChild(note);
+    stopLogsStream();
+  });
+  es.addEventListener('error', () => {
+    const note = document.createElement('div');
+    note.className = 'log-row log-warn';
+    note.textContent = '[stream disconnected — will retry on next click]';
+    out.appendChild(note);
+    stopLogsStream();
+  });
+  const btn = document.getElementById('logs-stream');
+  btn.textContent = 'Stop streaming';
+  btn.classList.remove('btn-ghost');
+  btn.classList.add('btn-primary');
+}
+
 // ── Tab switching ───────────────────────────────────────
 function activateTab(name) {
   document.querySelectorAll('.tab').forEach((t) => {
@@ -310,6 +488,8 @@ function activateTab(name) {
   });
 
   if (name === 'snapshots') refreshSnapshots();
+  if (name === 'logs') refreshLogs();
+  if (name !== 'logs') stopLogsStream();
 }
 
 // ── Boot ────────────────────────────────────────────────
@@ -321,6 +501,12 @@ async function boot() {
   document.getElementById('refresh').addEventListener('click', () => refreshProbes());
   document.getElementById('recover-all').addEventListener('click', doRecoverAll);
   document.getElementById('recover-updater').addEventListener('click', doRecoverUpdater);
+  document.getElementById('logs-refresh').addEventListener('click', () => refreshLogs());
+  document.getElementById('logs-stream').addEventListener('click', () => toggleLogsStream());
+  document.getElementById('logs-container').addEventListener('change', () => {
+    stopLogsStream();
+    refreshLogs();
+  });
 
   // Open Updater Console — port 3003 on the same host.
   const link = document.getElementById('open-updater');

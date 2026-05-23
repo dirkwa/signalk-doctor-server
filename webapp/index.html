@@ -15,6 +15,7 @@
       </div>
       <nav class="tabs">
         <button type="button" class="tab is-active" data-tab="probes">Health</button>
+        <button type="button" class="tab" data-tab="logs">Logs</button>
         <button type="button" class="tab" data-tab="snapshots">Snapshots</button>
         <button type="button" class="tab" data-tab="recover">Recovery</button>
       </nav>
@@ -36,6 +37,26 @@
           <p class="footnote" id="probes-meta">Running probes…</p>
         </div>
         <div id="probes-list"></div>
+      </section>
+
+      <section id="view-logs" class="view is-hidden">
+        <div class="logs-toolbar">
+          <label>
+            Container
+            <select id="logs-container">
+              <option value="signalk-doctor-server">signalk-doctor-server</option>
+              <option value="signalk-updater-server">signalk-updater-server</option>
+              <option value="signalk-server">signalk-server</option>
+            </select>
+          </label>
+          <label>
+            Lines
+            <input type="number" id="logs-lines" min="50" max="5000" value="500" />
+          </label>
+          <button type="button" id="logs-refresh" class="btn btn-ghost">Refresh</button>
+          <button type="button" id="logs-stream" class="btn btn-ghost">Stream</button>
+        </div>
+        <div id="logs-output" class="logs">Loading logs…</div>
       </section>
 
       <section id="view-snapshots" class="view is-hidden">
