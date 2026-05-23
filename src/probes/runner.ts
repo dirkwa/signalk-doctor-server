@@ -8,6 +8,7 @@ import { probeDisk } from './disk.js';
 import { probeMemory } from './memory.js';
 import { probeTimeDrift } from './time-drift.js';
 import { probeSnapshots } from './snapshots.js';
+import { probeVersionDrift } from './version-drift.js';
 
 const PROBES = [
   probePodman,
@@ -16,6 +17,7 @@ const PROBES = [
   probeUpdaterContainer,
   probeSignalkHealth,
   probeUpdaterHealth,
+  probeVersionDrift,
   probeSnapshots,
   probeDisk,
   probeMemory,
