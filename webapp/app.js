@@ -460,8 +460,17 @@ function toggleLogsPause() {
     btn.textContent = 'Pause';
     btn.classList.remove('btn-primary');
     btn.classList.add('btn-ghost');
-    setLogsStatus(logsEventSource ? 'connected' : 'disconnected');
+    setLogsStatus(currentLogsStatus());
   }
+}
+
+// Map EventSource.readyState back to a status string the pill can
+// render. 0 = CONNECTING, 1 = OPEN, 2 = CLOSED.
+function currentLogsStatus() {
+  if (!logsEventSource) return 'disconnected';
+  if (logsEventSource.readyState === 1) return 'connected';
+  if (logsEventSource.readyState === 0) return 'connecting';
+  return 'disconnected';
 }
 
 // ── Tab switching ───────────────────────────────────────
