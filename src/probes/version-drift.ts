@@ -1,7 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ProbeResult } from './types.js';
-import { resolveRuntime } from '../podman/client.js';
+import { resolveRuntime, safe } from '../podman/client.js';
+import type { CategorizedError } from '../errors.js';
 
 // Resolve these at request time, not module-load, so tests can swap
 // them via process.env between probe runs and so the installer can
@@ -25,6 +26,12 @@ interface Sources {
   /** package.json version reported by the engine itself (only the updater
    *  exposes one — null for signalk-server). */
   reportedVersion: string | null;
+  /** Categorized error from the dockerode inspect call. Null on
+   *  success or on the benign "container not found" case (already
+   *  reflected in runningImage=null). Set to a CategorizedError for
+   *  network / auth / permission failures so the probe surfaces them
+   *  instead of silently degrading to "no version information". */
+  runtimeError: CategorizedError | null;
 }
 
 function tagOf(image: string | null): string | null {
@@ -54,19 +61,38 @@ async function readQuadletImage(quadletName: string): Promise<string | null> {
   }
 }
 
-async function readRunningImage(name: string): Promise<string | null> {
+interface RunningImageResult {
+  image: string | null;
+  /** Categorized error from the dockerode inspect. Null on success or
+   *  on the "container not found" path (which we treat as "no info
+   *  yet" rather than a failure to surface). */
+  error: CategorizedError | null;
+}
+
+async function readRunningImage(name: string): Promise<RunningImageResult> {
   const rt = await resolveRuntime();
-  if (!rt) return null;
-  try {
-    const info = (await rt.client.getContainer(name).inspect()) as unknown as {
-      Image?: string;
-      ImageName?: string;
-      Config?: { Image?: string };
-    };
-    return info.ImageName ?? info.Config?.Image ?? info.Image ?? null;
-  } catch {
-    return null;
+  if (!rt) return { image: null, error: null };
+  const result = await safe(() => rt.client.getContainer(name).inspect());
+  if (!result.ok) {
+    // "not-found" is the benign "this peer isn't installed yet" path
+    // (e.g. fresh boat with only signalk-server). Everything else
+    // (network / auth / permission / unknown) is real and should
+    // surface up to the probe message so a user knows the doctor
+    // couldn't read the runtime state.
+    if (result.error.kind === 'not-found') {
+      return { image: null, error: null };
+    }
+    return { image: null, error: result.error };
   }
+  const info = result.value as unknown as {
+    Image?: string;
+    ImageName?: string;
+    Config?: { Image?: string };
+  };
+  return {
+    image: info.ImageName ?? info.Config?.Image ?? info.Image ?? null,
+    error: null,
+  };
 }
 
 async function readReportedVersion(url: string): Promise<string | null> {
@@ -91,7 +117,7 @@ async function gatherSources(
   quadletName: string,
   healthUrl: string | null,
 ): Promise<Sources> {
-  const [quadletImage, runningImage, reportedVersion] = await Promise.all([
+  const [quadletImage, running, reportedVersion] = await Promise.all([
     readQuadletImage(quadletName),
     readRunningImage(containerName),
     healthUrl ? readReportedVersion(healthUrl) : Promise.resolve<string | null>(null),
@@ -99,9 +125,10 @@ async function gatherSources(
   return {
     quadletImage,
     quadletTag: tagOf(quadletImage),
-    runningImage,
-    runningTag: tagOf(runningImage),
+    runningImage: running.image,
+    runningTag: tagOf(running.image),
     reportedVersion,
+    runtimeError: running.error,
   };
 }
 
@@ -145,12 +172,23 @@ export async function probeVersionDrift(): Promise<ProbeResult> {
   );
 
   const driftMessages: string[] = [];
+  const runtimeWarnings: string[] = [];
   const okSummaries: string[] = [];
   const details: Record<string, unknown> = {};
 
   for (const r of results) {
     details[r.container] = r.sources;
-    const { quadletTag, runningTag, reportedVersion } = r.sources;
+    const { quadletTag, runningTag, reportedVersion, runtimeError } = r.sources;
+    // CC-6: a real runtime error (network/auth/permission/unknown)
+    // means we can't trust runningTag = null as "no container", so
+    // surface the categorized userMessage instead of silently
+    // declaring no-drift.
+    if (runtimeError) {
+      runtimeWarnings.push(
+        `${r.container}: cannot read running image (${runtimeError.kind}: ${runtimeError.userMessage})`,
+      );
+      continue;
+    }
     if (quadletTag && runningTag && quadletTag !== runningTag) {
       driftMessages.push(
         `${r.container}: Quadlet pins ${quadletTag} but container is on ${runningTag}`,
@@ -179,7 +217,21 @@ export async function probeVersionDrift(): Promise<ProbeResult> {
       id: 'version-drift',
       label: 'Version drift',
       status: 'warn',
-      message: driftMessages.join('; '),
+      message: [...driftMessages, ...runtimeWarnings].join('; '),
+      details,
+      durationMs: Date.now() - t0,
+    };
+  }
+
+  // Runtime errors without a drift verdict are still worth surfacing —
+  // they mean "we couldn't tell." Warn instead of ok so the user
+  // notices the probe didn't complete its check.
+  if (runtimeWarnings.length > 0) {
+    return {
+      id: 'version-drift',
+      label: 'Version drift',
+      status: 'warn',
+      message: runtimeWarnings.join('; '),
       details,
       durationMs: Date.now() - t0,
     };
