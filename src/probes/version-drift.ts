@@ -34,6 +34,15 @@ interface Sources {
   runtimeError: CategorizedError | null;
 }
 
+// Tags like `latest`, `master`, `beta`, `edge` are moving — comparing
+// their literal string against an engine's reported semver is just
+// noise. The check we actually care about (did the user pin to a
+// specific version that doesn't match what's running) only fires when
+// the tag itself looks like a version.
+function isFixedVersionTag(tag: string): boolean {
+  return /^v?\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(tag);
+}
+
 function tagOf(image: string | null): string | null {
   if (!image) return null;
   // Strip optional @sha256:… digest first, then take after the last colon.
@@ -195,13 +204,25 @@ export async function probeVersionDrift(): Promise<ProbeResult> {
       );
       continue;
     }
-    if (reportedVersion && runningTag && reportedVersion !== runningTag) {
+    if (
+      reportedVersion &&
+      runningTag &&
+      isFixedVersionTag(runningTag) &&
+      reportedVersion !== runningTag &&
+      `v${reportedVersion}` !== runningTag
+    ) {
       driftMessages.push(
         `${r.container}: image tag ${runningTag} but engine reports v${reportedVersion}`,
       );
       continue;
     }
-    if (reportedVersion && quadletTag && reportedVersion !== quadletTag) {
+    if (
+      reportedVersion &&
+      quadletTag &&
+      isFixedVersionTag(quadletTag) &&
+      reportedVersion !== quadletTag &&
+      `v${reportedVersion}` !== quadletTag
+    ) {
       driftMessages.push(
         `${r.container}: Quadlet pins ${quadletTag} but engine reports v${reportedVersion}`,
       );
