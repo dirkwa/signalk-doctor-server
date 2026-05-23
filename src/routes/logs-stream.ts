@@ -104,6 +104,14 @@ export async function registerLogStreamRoutes(app: FastifyInstance): Promise<voi
       const tail = Math.max(1, Math.min(5000, Number.parseInt(req.query.tail ?? '200', 10) || 200));
       // Touch the broker to ensure history is being collected even
       // before the first SSE client connects.
+      //
+      // Cold-start UX: the broker's follow-stream resolves
+      // asynchronously, so a Refresh issued in the same tick that
+      // first instantiates the broker (e.g. opening the Logs tab and
+      // immediately hitting Refresh) returns whatever history is
+      // already buffered — typically empty. The webapp renders an
+      // explicit "no log output yet — click Stream to subscribe"
+      // hint in that case, so subsequent clicks just work.
       getOrCreateBroker(name, tail);
       reply.type('text/plain; charset=utf-8').send(getHistory(name, tail).join('\n'));
       return reply;
