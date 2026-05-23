@@ -3,6 +3,7 @@ import fastifyStatic from '@fastify/static';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { registerHealthRoutes } from './routes/health.js';
+import { registerSessionRoutes } from './routes/session.js';
 import { registerProbeRoutes } from './routes/probes.js';
 import { registerRecoverRoutes } from './routes/recover.js';
 
@@ -19,6 +20,7 @@ export async function createServer(): Promise<FastifyInstance> {
 
   // API routes first so they take precedence over the static fallback.
   await registerHealthRoutes(app);
+  await registerSessionRoutes(app);
   await registerProbeRoutes(app);
   await registerRecoverRoutes(app);
 
