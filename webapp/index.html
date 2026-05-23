@@ -53,10 +53,11 @@
             Lines
             <input type="number" id="logs-lines" min="50" max="5000" value="500" />
           </label>
-          <button type="button" id="logs-refresh" class="btn btn-ghost">Refresh</button>
-          <button type="button" id="logs-stream" class="btn btn-ghost">Stream</button>
+          <span id="logs-status" class="logs-status">disconnected</span>
+          <button type="button" id="logs-pause" class="btn btn-ghost">Pause</button>
+          <button type="button" id="logs-clear" class="btn btn-ghost">Clear</button>
         </div>
-        <div id="logs-output" class="logs">Loading logs…</div>
+        <div id="logs-output" class="logs">Connecting…</div>
       </section>
 
       <section id="view-snapshots" class="view is-hidden">

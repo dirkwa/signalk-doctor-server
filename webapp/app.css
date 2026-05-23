@@ -418,6 +418,49 @@ code {
   width: 5rem;
 }
 
+.logs-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+  background: var(--bg-elev);
+  margin-right: auto;
+}
+
+.logs-status::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentcolor;
+}
+
+.logs-status-connecting {
+  color: var(--warn);
+}
+
+.logs-status-connected {
+  color: var(--ok);
+}
+
+.logs-status-paused {
+  color: var(--accent);
+}
+
+.logs-status-error {
+  color: var(--err);
+}
+
+.logs-status-disconnected {
+  color: var(--text-muted);
+}
+
 .log-row {
   display: grid;
   grid-template-columns: 4.5rem 4rem 1fr;
