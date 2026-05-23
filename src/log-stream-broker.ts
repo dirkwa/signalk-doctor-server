@@ -95,7 +95,7 @@ const defaultSpawnTail: SpawnTail = (name, emit, { startTail, onError, onExit })
         stdout: true,
         stderr: true,
         follow: true,
-        tail: String(startTail) as unknown as number,
+        tail: startTail,
         timestamps: false,
       })) as Readable;
       if (stopped) {
