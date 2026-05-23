@@ -129,6 +129,16 @@ export async function registerLogStreamRoutes(app: FastifyInstance): Promise<voi
       // snapshot — easy because history is the chronologically older
       // window, so any buffered line that's a string-equal duplicate
       // of the last few history entries is the same one.
+      //
+      // Trade-off: string-equality dedup can over-skip when a
+      // container legitimately emits the same line twice in rapid
+      // succession (e.g. repeated "Error connecting to …" lines that
+      // straddle the handoff). In that case the second occurrence is
+      // dropped from the client view; the broker's ring buffer still
+      // has both. Bullet-proof fix would need sequence IDs or
+      // timestamps from the broker — not worth the complexity given
+      // the handoff window is sub-millisecond in practice and the
+      // dropped line is by definition identical to one already shown.
       const lastHistory = history.length > 0 ? history[history.length - 1] : null;
       let drainStart = 0;
       if (lastHistory !== null) {

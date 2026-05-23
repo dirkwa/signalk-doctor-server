@@ -274,18 +274,23 @@ function showConfirm({ title, body, okLabel = 'OK' }) {
       cleanup();
       resolve(result);
     };
+    // Order matters: dialog.close() synchronously emits the 'close'
+    // event, which would otherwise drive onDialogClose -> finish(false)
+    // before we got a chance to record the intended OK result. Settle
+    // the promise FIRST, then close the dialog — the close-event
+    // handler then sees settled=true and no-ops.
     const onOk = () => {
-      dialog.close();
       finish(true);
+      dialog.close();
     };
     const onCancel = () => {
-      dialog.close();
       finish(false);
+      dialog.close();
     };
     const onDialogCancel = (ev) => {
       ev.preventDefault();
-      dialog.close();
       finish(false);
+      dialog.close();
     };
     const onDialogClose = () => finish(false);
     function cleanup() {
