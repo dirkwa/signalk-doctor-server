@@ -38,11 +38,14 @@ const warmedContainers = new Set<string>();
 
 function warmBroker(name: string, tail: number): void {
   if (warmedContainers.has(name)) return;
-  warmedContainers.add(name);
+  // Subscribe before marking warm: if getOrCreateBroker or subscribe
+  // throws (e.g. runtime not reachable), we want the next call to
+  // retry rather than silently leaving the container forever cold.
   const broker = getOrCreateBroker(name, tail);
   broker.subscribe({
     onLine: (line) => pushHistory(name, line),
   });
+  warmedContainers.add(name);
 }
 
 export async function registerLogStreamRoutes(app: FastifyInstance): Promise<void> {
