@@ -26,6 +26,10 @@ describe('GET /api/session', () => {
     try {
       const res = await app.inject({ method: 'GET', url: '/api/session' });
       expect(res.statusCode).toBe(200);
+      // Bearer tokens must not be cached by intermediaries or the
+      // browser disk cache.
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['pragma']).toBe('no-cache');
       const body = res.json() as { token: string };
       expect(body.token).toBe('test-token-xyz');
     } finally {
@@ -35,11 +39,18 @@ describe('GET /api/session', () => {
 
   it('returns 503 when the token file is missing', async () => {
     const saved = process.env.TOKEN_PATH;
-    process.env.TOKEN_PATH = '/tmp/this-path-definitely-does-not-exist-xyz';
+    // Point at a guaranteed-missing path inside the temp dir rather
+    // than a hardcoded /tmp/... so the test doesn't depend on the
+    // host environment.
+    process.env.TOKEN_PATH = join(dir, 'this-file-does-not-exist');
     const app = await createServer();
     try {
       const res = await app.inject({ method: 'GET', url: '/api/session' });
       expect(res.statusCode).toBe(503);
+      const body = res.json() as { error: string; detail?: unknown };
+      expect(body.error).toMatch(/token file unreadable/);
+      // We must NOT leak the filesystem path back to the client.
+      expect(body).not.toHaveProperty('detail');
     } finally {
       await app.close();
       process.env.TOKEN_PATH = saved;
