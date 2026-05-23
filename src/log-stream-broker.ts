@@ -11,7 +11,7 @@
 // transparently reconnects when a container auto-recreates between
 // version switches.
 
-import type { Readable } from 'node:stream';
+import { PassThrough, type Readable } from 'node:stream';
 import { resolveRuntime } from './podman/client.js';
 
 const RESPAWN_DELAY_MS = 1000;
@@ -106,8 +106,25 @@ const defaultSpawnTail: SpawnTail = (name, emit, { startTail, onError, onExit })
         return;
       }
       stream = s;
-      s.on('data', (chunk: Buffer) => splitLines(chunk.toString('utf8')));
+      // Containers running without a TTY (the default for our
+      // Quadlets) emit a multiplexed stream with an 8-byte header in
+      // front of every stdout/stderr chunk. Treating the raw bytes as
+      // UTF-8 leaks those headers into the log view as binary
+      // garbage. Demux via dockerode's modem helper into two
+      // PassThrough pipes, then merge both back into the line
+      // splitter — we don't surface stdout-vs-stderr separately yet,
+      // so combining is fine.
+      const stdout = new PassThrough();
+      const stderr = new PassThrough();
+      const onChunk = (chunk: Buffer): void => splitLines(chunk.toString('utf8'));
+      stdout.on('data', onChunk);
+      stderr.on('data', onChunk);
+      rt.client.modem.demuxStream(s, stdout, stderr);
       s.on('end', () => {
+        if (buffer.length > 0) {
+          emit(buffer);
+          buffer = '';
+        }
         if (!stopped) onExit();
       });
       s.on('error', (err) => {
