@@ -49,6 +49,18 @@ function warmBroker(name: string): void {
   const broker = getOrCreateBroker(name, BACKFILL_LIMIT);
   broker.subscribe({
     onLine: (line) => pushHistory(name, line),
+    // When the broker closes (container removed, engine shutting
+    // down), drop our warm flag and history so the next request for
+    // this container name starts clean. Without this, a removed
+    // container's name stays in `warmedContainers` forever — even
+    // if a fresh container with the same name comes up later, the
+    // early-return at the top of warmBroker prevents us from
+    // attaching a new subscriber to the new broker, and history
+    // capture silently stops.
+    onClose: () => {
+      warmedContainers.delete(name);
+      containerHistory.delete(name);
+    },
   });
   warmedContainers.add(name);
 }
@@ -76,19 +88,31 @@ export async function registerLogStreamRoutes(app: FastifyInstance): Promise<voi
       // an empty backfill on first connect.
       warmBroker(name);
 
-      // Backfill from the in-memory history first so the client doesn't
-      // see a blank pane while the broker primes its follow-stream.
-      const history = getHistory(name, tail);
-      for (const line of history) reply.raw.write(`data: ${line}\n\n`);
+      // Atomic backfill → live handoff. Naive ordering (snapshot
+      // history → write → subscribe) drops every line emitted
+      // between the snapshot and the subscribe call. To close the
+      // race:
+      //   1. Subscribe FIRST with a buffering handler (no socket
+      //      writes yet) so we don't miss any live lines.
+      //   2. Snapshot history.
+      //   3. Write history to the socket.
+      //   4. Flush any lines the buffer captured during steps 2-3,
+      //      dropping ones already in the history snapshot to avoid
+      //      visible duplicates.
+      //   5. Flip the handler over to direct socket writes.
+      let alive = true;
+      let liveMode = false;
+      const buffered: string[] = [];
 
       const broker = getOrCreateBroker(name, 0);
-
-      let alive = true;
-
       const unsubscribe = broker.subscribe({
         onLine: (line) => {
           if (!alive) return;
-          reply.raw.write(`data: ${line}\n\n`);
+          if (liveMode) {
+            reply.raw.write(`data: ${line}\n\n`);
+          } else {
+            buffered.push(line);
+          }
         },
         onClose: (reason) => {
           if (!alive) return;
@@ -96,6 +120,26 @@ export async function registerLogStreamRoutes(app: FastifyInstance): Promise<voi
           reply.raw.end();
         },
       });
+
+      const history = getHistory(name, tail);
+      for (const line of history) reply.raw.write(`data: ${line}\n\n`);
+
+      // Drain whatever leaked into the buffer while we were writing
+      // history. Skip any prefix already covered by the history
+      // snapshot — easy because history is the chronologically older
+      // window, so any buffered line that's a string-equal duplicate
+      // of the last few history entries is the same one.
+      const lastHistory = history.length > 0 ? history[history.length - 1] : null;
+      let drainStart = 0;
+      if (lastHistory !== null) {
+        const idx = buffered.lastIndexOf(lastHistory);
+        if (idx !== -1) drainStart = idx + 1;
+      }
+      for (let i = drainStart; i < buffered.length; i++) {
+        reply.raw.write(`data: ${buffered[i]}\n\n`);
+      }
+      buffered.length = 0;
+      liveMode = true;
 
       const heartbeat = setInterval(() => {
         if (alive) reply.raw.write(`: heartbeat\n\n`);
