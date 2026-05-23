@@ -112,6 +112,20 @@ function escapeHtml(s) {
   );
 }
 
+// ── Brand version ────────────────────────────────────────
+// Pulled from /api/health (read once at engine start from the
+// container's own package.json). Surfaces in the topbar so a screenshot
+// can be traced to a specific release.
+async function refreshBrandVersion() {
+  try {
+    const h = await api(ROUTES.health);
+    const v = h.version && h.version !== 'unknown' ? `v${h.version}` : '';
+    document.getElementById('brand-version').textContent = v || '—';
+  } catch {
+    document.getElementById('brand-version').textContent = '—';
+  }
+}
+
 // ── Probes ──────────────────────────────────────────────
 async function refreshProbes() {
   document.getElementById('probes-meta').textContent = 'Running probes…';
@@ -512,7 +526,7 @@ async function boot() {
   link.href = `${window.location.protocol}//${window.location.hostname}:3003/`;
 
   await loadSession();
-  await refreshProbes();
+  await Promise.all([refreshProbes(), refreshBrandVersion()]);
 
   // Light polling: re-run probes every 15s while Health tab is visible.
   setInterval(() => {

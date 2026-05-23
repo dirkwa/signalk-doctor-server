@@ -75,6 +75,19 @@ code {
   margin: 0;
 }
 
+.brand-version {
+  margin-left: 0.4rem;
+  padding: 0.1rem 0.45rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 .brand-icon {
   width: 32px;
   height: 32px;

@@ -70,4 +70,7 @@ export interface HealthResponse {
   runtime: RuntimeKind;
   socketPath?: string;
   uptimeSeconds: number;
+  /** Engine container's own package.json version, surfaced so a
+   *  user's screenshot can be traced to a specific release. */
+  version: string;
 }
