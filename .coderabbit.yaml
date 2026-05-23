@@ -1,0 +1,243 @@
+language: en-US
+
+reviews:
+  profile: assertive
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    ignore_title_keywords:
+      - "chore(release):"
+      - "chore(deps):"
+      - "chore(deps-dev):"
+      - "[skip review]"
+      - "WIP"
+    ignore_usernames:
+      - "release-please[bot]"
+      - "renovate[bot]"
+      - "dependabot[bot]"
+      - "github-actions[bot]"
+
+  path_filters:
+    - "!**/package-lock.json"
+    - "!**/yarn.lock"
+    - "!**/pnpm-lock.yaml"
+    - "!**/*.min.js"
+    - "!**/*.min.css"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/node_modules/**"
+
+  high_level_summary_instructions: |
+    Write summaries in present tense. Describe what the code does, not what
+    it did. Skip filler like "This PR" — go straight to the change.
+
+  path_instructions:
+    - path: '**/*'
+      instructions: |
+        ## Scope
+
+        Focus on files changed since `master`. Think about how changes
+        interact with the rest of the stack, not just the diff in isolation.
+
+        signalk-doctor-server is the **peer engine container** for
+        diagnostics and last-known-good recovery. It runs alongside
+        signalk-server (NOT inside) and is independent of
+        signalk-updater-server. When the updater is broken (bad self-update,
+        crashloop, DBus dead), this container is the path back. Reviews
+        should respect that it must work when nothing else does.
+
+        - **Not a SignalK plugin.** Standalone Node 24 container, Fastify
+          backend, started by systemd-user via the Quadlet that the bash
+          installer drops at
+          `~/.config/containers/systemd/signalk-doctor-server.container`.
+          The thin-shell plugin is in
+          [signalk-doctor](https://github.com/dirkwa/signalk-doctor).
+        - **Code twin of signalk-updater-server** at the skeleton level
+          (same Fastify factory, same `src/podman/client.ts` shape, same
+          `src/errors.ts`, same Dockerfile pattern). Lifting helpers
+          between the two is expected. See AGENTS.md
+          "Relationship to signalk-updater-server".
+
+        ## Cross-cutting requirements (CC-1..CC-6)
+
+        These are derived from the master plan; do not relax them without
+        updating that plan first.
+
+        - **CC-1 Snapshot every Quadlet write.** The updater or this
+          container must snapshot the existing Quadlet under
+          `~/.signalk-doctor/snapshots/<timestamp>-<filename>` before
+          writing. Keep last 10 per file; **never prune `last-good`**.
+          Flag any code that writes to `/quadlets/*.container` without a
+          prior snapshot.
+        - **CC-2 Bearer-token auth on mutating routes only.** Read-only
+          probes are unauthenticated (a desperate user must be able to
+          discover what's broken without a token). Only `POST
+          /api/recover*` and similar mutating endpoints require the
+          bearer token. Token at `/data/token` (host
+          `~/.signalk-doctor/token`, mode 0600). Flag any auth check on
+          read-only routes; flag any mutating route without an auth check.
+        - **CC-3 Twin with the host recovery script.** The host-resident
+          `~/.local/bin/signalk-recovery` script does the same things
+          this container does, via bash. Keep semantics aligned — if you
+          add or change a recovery action here, update the recovery
+          script in
+          [signalk-universal-installer](https://github.com/dirkwa/signalk-universal-installer)
+          in lockstep.
+        - **CC-4 Restart policy.** Quadlets use `Restart=on-failure` with
+          `StartLimitIntervalSec=300` and `StartLimitBurst=5`.
+          `Restart=always` is banned. Flag any quadlet snippet that uses
+          `Restart=always`.
+        - **CC-5 Single-writer mutex.** `~/.signalk-updater/operation.lock`
+          is shared with the updater. Refuse to recover while the updater
+          holds the lock; surface a clear "wait or force-clear" message.
+          Flag mutation paths that bypass the lock.
+        - **CC-6 Categorized errors.** Every error returned from the
+          dockerode wrapper boundary must be a typed/categorized error
+          (`src/errors.ts`), not a raw `Error` with a string message.
+
+        ## Read-mostly by design
+
+        - **Probes don't mutate.** Anything that touches host state goes
+          through `/api/recover*`, which is auth-gated.
+        - **Read-only mounts where possible.** `~/.signalk-updater` is
+          mounted read-only (`/updater-data`) — it's only for the shared
+          lock file. Don't suggest making it read-write.
+        - Flag any non-recovery route that performs a write to the host
+          filesystem, podman socket, or DBus.
+
+        ## ESM / TypeScript strict / Node 24
+
+        - `"type": "module"` — all imports use the `.js` suffix for
+          relative paths (NodeNext resolution). Do not suggest dropping
+          the suffix.
+        - tsconfig is strict. Avoid `any`. Prefer narrowing with
+          `unknown` + runtime checks at boundaries (HTTP request bodies,
+          child-process stdout, dockerode responses).
+        - Node `>= 24` per `engines`. Native fetch is fine. Codebase
+          convention: named imports from `fs/promises`. Don't suggest
+          the `node:` prefix — the project deliberately doesn't use it.
+
+        ## Shell-out conventions
+
+        - Use `execFile` (promisified) when you control the args, never
+          `exec`. Never construct shell strings from user input.
+        - Long-running children (probes that spawn things, future
+          recovery steps) go through `spawn` with stderr-streamed
+          progress parsing.
+        - Always set a `timeout` on child invocations.
+        - Errors from child processes should be wrapped via `src/errors.ts`
+          with `{ cause }` preserved (CC-6).
+
+        ## API conventions
+
+        - Fastify. TypeBox schemas validate every route body. Define the
+          schema in `schemas/` and pass it via the route options. Don't
+          hand-parse `request.body`.
+        - Throwing in a route handler funnels through Fastify's error
+          handler — don't try/catch + re-respond, just throw a typed
+          error from `src/errors.ts` (CC-6).
+        - CORS is **loopback-only** by design (the plugin and the host
+          recovery script are the only callers). Don't loosen CORS
+          without justification.
+
+        ## Secrets / credentials
+
+        - The bearer token lives at `~/.signalk-doctor/token` (mode
+          0600). Any new credential storage MUST follow the same pattern:
+          explicit mode on `writeFile` + a post-chmod for pre-existing
+          files.
+        - Logger is `pino`. Any new code that logs settings or HTTP
+          bodies MUST use `logger.child(...)` or the root `logger` —
+          DO NOT instantiate a fresh `pino(...)` because it bypasses the
+          redact config. Never log the bearer token.
+
+        ## podman / dockerode
+
+        - `src/podman/client.ts` is the only place that talks to the
+          podman socket. New code that needs container info should go
+          through this wrapper, not instantiate a fresh `Dockerode`.
+        - Runtime detection (rootless vs rootful, podman vs docker
+          fallback) lives in this wrapper. Don't duplicate it.
+        - All dockerode errors should be funnelled through the categorized
+          error types (CC-6).
+
+        ## DBus / systemctl
+
+        - The container calls `systemctl --user daemon-reload` and
+          related via DBus on `/host/dbus` (mounted read-only at runtime
+          per the Phase 5 mounts table). Use `@homebridge/dbus-native`
+          or equivalent — don't shell out to `dbus-send` and don't ship
+          systemd binaries in the image.
+        - DBus calls are mutating operations and must respect CC-5 (the
+          shared operation lock) and CC-2 (auth on the route that
+          triggers them).
+
+        ## Echo comments
+
+        Flag any comment that merely restates what the code already says.
+        Examples to flag:
+
+        - `// Read the token` above `await readFile(tokenPath, 'utf8')`
+        - `// Probe podman` above a Dockerode `ping()` call
+
+        Replace with comments explaining *why*, not *what*. Or delete.
+
+        ## Documentation drift risk
+
+        Flag any `.md` file that contains:
+
+        - Specific code snippets, function signatures, or config values
+          likely to fall out of sync as code evolves.
+        - Step-by-step build/development instructions that duplicate or
+          shadow the code itself.
+        - Implementation status, progress markers ("Phase 3: …"),
+          "currently implemented as X" wording. Build narratives belong
+          in PR descriptions, not in repo docs.
+
+        Architecture decisions, conceptual design rationale, and the
+        CC-1..CC-6 cross-cutting requirements table are fine — those are
+        load-bearing.
+
+        ## Leftover crumbs from intermediate commits
+
+        Flag references in the current diff to symbols, files, or
+        approaches that no longer exist on this branch — old function
+        names in comments, dangling imports, stale TODOs from a
+        superseded approach, etc.
+
+        ## Unchecked items in test plans
+
+        If the PR description has a checklist with unchecked items, flag
+        it. Either the work isn't done, or the unchecked items should be
+        removed.
+
+        ## Commit / PR conventions
+
+        - Branch names use **hyphens**, never slashes.
+        - Angular conventional commits: `<type>(<scope>): <subject>`.
+          Subject ≤ 50 chars, imperative mood, no period.
+        - One logical change per commit and per PR.
+        - **No AI attribution** in commits, PR bodies, or code. Don't
+          mention Claude, AI, or add `Co-Authored-By` trailers.
+        - **No version bumps** in feature/fix PRs. Versions are bumped in
+          dedicated `chore(release):` PRs only when the user explicitly
+          asks.
+        - PR descriptions: no checkboxes. "Tested" lists what was
+          actually verified, not what's planned.
+
+        ## What NOT to flag
+
+        These are intentional:
+
+        - Read-only probes without auth — see CC-2.
+        - Snapshot-before-write on every Quadlet mutation — see CC-1.
+        - The "code twin" overlap with signalk-updater-server (same
+          Fastify factory, same `podman/client.ts`, same `errors.ts`) —
+          documented in AGENTS.md.
+        - `Restart=on-failure` instead of `Restart=always` in Quadlet
+          snippets — required by CC-4.
+        - The shared `~/.signalk-updater/operation.lock` despite this
+          being the doctor repo — that's the single-writer mutex (CC-5).
+        - Read-only mount of `~/.signalk-updater` at `/updater-data` —
+          deliberate; only the lock file is needed.
