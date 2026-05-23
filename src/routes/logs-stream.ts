@@ -28,6 +28,23 @@ function getHistory(name: string, tail: number): string[] {
   return buf.slice(-tail);
 }
 
+// Brokers don't spawn their dockerode follow-stream until at least one
+// subscriber attaches. To make the one-shot /logs endpoint usable
+// before any SSE client connects, we keep a permanent internal
+// subscriber per container that captures every line into the history
+// ring buffer. The subscriber is created lazily by warmBroker(); once
+// created it stays for the lifetime of the engine.
+const warmedContainers = new Set<string>();
+
+function warmBroker(name: string, tail: number): void {
+  if (warmedContainers.has(name)) return;
+  warmedContainers.add(name);
+  const broker = getOrCreateBroker(name, tail);
+  broker.subscribe({
+    onLine: (line) => pushHistory(name, line),
+  });
+}
+
 export async function registerLogStreamRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { name: string }; Querystring: { tail?: string } }>(
     '/api/containers/:name/logs/stream',
@@ -46,23 +63,22 @@ export async function registerLogStreamRoutes(app: FastifyInstance): Promise<voi
         'x-accel-buffering': 'no',
       });
 
+      // Make sure the permanent history-capture subscriber is in place
+      // before backfilling; otherwise a brand-new container would get
+      // an empty backfill on first connect.
+      warmBroker(name, tail);
+
       // Backfill from the in-memory history first so the client doesn't
       // see a blank pane while the broker primes its follow-stream.
       const history = getHistory(name, tail);
       for (const line of history) reply.raw.write(`data: ${line}\n\n`);
 
-      // The broker keeps a single follow-stream against the runtime
-      // daemon regardless of how many SSE clients connect. Lifting this
-      // pattern from signalk-container — it survived auto-recreate,
-      // crashloops, and daemon glitches there, and the engine container
-      // has the same failure modes.
-      const broker = getOrCreateBroker(name, history.length === 0 ? tail : 0);
+      const broker = getOrCreateBroker(name, 0);
 
       let alive = true;
 
       const unsubscribe = broker.subscribe({
         onLine: (line) => {
-          pushHistory(name, line);
           if (!alive) return;
           reply.raw.write(`data: ${line}\n\n`);
         },
@@ -102,17 +118,15 @@ export async function registerLogStreamRoutes(app: FastifyInstance): Promise<voi
         return { error: 'invalid container name' };
       }
       const tail = Math.max(1, Math.min(5000, Number.parseInt(req.query.tail ?? '200', 10) || 200));
-      // Touch the broker to ensure history is being collected even
-      // before the first SSE client connects.
-      //
-      // Cold-start UX: the broker's follow-stream resolves
-      // asynchronously, so a Refresh issued in the same tick that
-      // first instantiates the broker (e.g. opening the Logs tab and
-      // immediately hitting Refresh) returns whatever history is
-      // already buffered — typically empty. The webapp renders an
-      // explicit "no log output yet — click Stream to subscribe"
-      // hint in that case, so subsequent clicks just work.
-      getOrCreateBroker(name, tail);
+      // Cold-start UX: warmBroker() attaches a permanent subscriber on
+      // first call, but the broker's underlying dockerode follow-stream
+      // resolves asynchronously. A Refresh issued in the same tick
+      // that first warms the broker returns whatever history is
+      // already buffered — typically empty for a brand-new container.
+      // The webapp renders an explicit "no log output yet — click
+      // Stream to subscribe" hint in that case, so subsequent clicks
+      // just work.
+      warmBroker(name, tail);
       reply.type('text/plain; charset=utf-8').send(getHistory(name, tail).join('\n'));
       return reply;
     },
