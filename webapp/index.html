@@ -4,26 +4,101 @@
     <meta charset="utf-8" />
     <title>SignalK Doctor</title>
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <style>
-      body {
-        font-family: system-ui, sans-serif;
-        padding: 2rem;
-        max-width: 640px;
-        margin: 0 auto;
-      }
-      h1 {
-        font-size: 1.5rem;
-      }
-      code {
-        background: #f3f3f3;
-        padding: 0 0.25rem;
-        border-radius: 3px;
-      }
-    </style>
+    <link rel="icon" href="/app-icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="/app.css" />
   </head>
   <body>
-    <h1>SignalK Doctor</h1>
-    <p>The doctor HTTP service is running. The Doctor Console will be built out in Phase 5.</p>
-    <p>For now, probe <code>GET /api/health</code> to verify the container is healthy.</p>
+    <header class="topbar">
+      <div class="brand">
+        <img src="/app-icon.svg" alt="" class="brand-icon" />
+        <h1>SignalK Doctor</h1>
+      </div>
+      <nav class="tabs">
+        <button type="button" class="tab is-active" data-tab="probes">Health</button>
+        <button type="button" class="tab" data-tab="snapshots">Snapshots</button>
+        <button type="button" class="tab" data-tab="recover">Recovery</button>
+      </nav>
+      <div class="actions">
+        <a id="open-updater" class="btn btn-ghost" href="/updater">Open Updater Console</a>
+        <button type="button" id="refresh" class="btn btn-ghost" title="Re-run probes">
+          Re-run
+        </button>
+      </div>
+    </header>
+
+    <main>
+      <section id="view-probes" class="view">
+        <div class="summary-bar">
+          <div class="pill pill-ok"><span data-summary="ok">0</span> ok</div>
+          <div class="pill pill-warn"><span data-summary="warn">0</span> warn</div>
+          <div class="pill pill-err"><span data-summary="fail">0</span> fail</div>
+          <div class="pill pill-unknown"><span data-summary="unknown">0</span> unknown</div>
+          <p class="footnote" id="probes-meta">Running probes…</p>
+        </div>
+        <div id="probes-list"></div>
+      </section>
+
+      <section id="view-snapshots" class="view is-hidden">
+        <p class="footnote" id="snapshots-meta">Loading snapshots…</p>
+        <div id="last-good"></div>
+        <div id="snapshots"></div>
+      </section>
+
+      <section id="view-recover" class="view is-hidden">
+        <div class="recover-block">
+          <h2>Recovery</h2>
+          <p>
+            Recovery rolls every managed Quadlet back to its last-known-good snapshot, runs
+            <code>systemctl --user daemon-reload</code>, and restarts both
+            <code>signalk-server</code> and <code>signalk-updater-server</code>. This is the
+            out-of-band path back when the updater can't help itself.
+          </p>
+          <p class="footnote">
+            Before clicking <strong>Recover all</strong>, open the Snapshots tab and check that the
+            <em>last-known-good</em> entries point to versions you actually trust.
+          </p>
+          <div class="recover-buttons">
+            <button type="button" id="recover-all" class="btn btn-danger">
+              Recover all (server + updater)
+            </button>
+            <button type="button" id="recover-updater" class="btn">Recover updater only</button>
+          </div>
+          <pre id="recover-result" class="logs is-hidden">
+No recovery has run yet in this session.</pre
+          >
+        </div>
+
+        <div class="recover-block">
+          <h2>Host-side safety net</h2>
+          <p>
+            If both this Doctor and the Updater are dead, log in over SSH and run the installer's
+            recovery script:
+          </p>
+          <pre class="logs"><code>~/.local/bin/signalk-recovery status
+~/.local/bin/signalk-recovery rollback-all</code></pre>
+          <p class="footnote">
+            That script is a pure-bash sibling of the doctor — same Quadlet snapshots, no container
+            dependencies.
+          </p>
+        </div>
+      </section>
+    </main>
+
+    <dialog id="confirm-modal">
+      <form method="dialog">
+        <h2 id="confirm-title">Confirm</h2>
+        <p id="confirm-body">Are you sure?</p>
+        <footer>
+          <button type="button" value="cancel" id="confirm-cancel" class="btn btn-ghost">
+            Cancel
+          </button>
+          <button type="button" value="ok" id="confirm-ok" class="btn btn-primary">OK</button>
+        </footer>
+      </form>
+    </dialog>
+
+    <div id="toast" class="toast is-hidden" role="status" aria-live="polite"></div>
+
+    <script type="module" src="/app.js"></script>
   </body>
 </html>
