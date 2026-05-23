@@ -423,6 +423,7 @@ async function refreshLogs() {
   out.appendChild(status);
   try {
     const res = await fetch(ROUTES.logsOnce(name, lines));
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
     clearLogs();
     if (!text) {
