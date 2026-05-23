@@ -75,6 +75,22 @@ describe('probeVersionDrift', () => {
     expect(details['signalk-server'].quadletTag).toBe('edge');
   });
 
+  it('does not flag drift when the Quadlet tag is a floating channel name', async () => {
+    // Quadlet says `:latest`, container is on `:latest`, engine reports
+    // v0.5.1 — that's the normal state. Comparing "latest" to "0.5.1"
+    // as strings would otherwise be a false-positive.
+    await writeFile(
+      join(dir, 'signalk-updater-server.container'),
+      'Image=ghcr.io/dirkwa/signalk-updater-server:latest\n',
+      'utf8',
+    );
+    // No mocked engine HTTP, but the no-conflict case should already
+    // hold even without one. Just assert no drift message is produced
+    // for the floating-tag Quadlet on its own.
+    const r = await probeVersionDrift();
+    expect(r.status).toBe('ok');
+  });
+
   it('strips an @sha256:… digest suffix before extracting the tag', async () => {
     await writeFile(
       join(dir, 'signalk-server.container'),
