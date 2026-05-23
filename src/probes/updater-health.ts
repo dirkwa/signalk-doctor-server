@@ -1,6 +1,8 @@
 import type { ProbeResult } from './types.js';
 
-const UPDATER_URL = process.env.UPDATER_URL ?? 'http://127.0.0.1:3003/api/health';
+// Same reasoning as signalk-health.ts: 127.0.0.1 is the doctor's own
+// container, not the host. Reach the updater via Podman's host gateway.
+const UPDATER_URL = process.env.UPDATER_URL ?? 'http://host.containers.internal:3003/api/health';
 
 export async function probeUpdaterHealth(): Promise<ProbeResult> {
   const t0 = Date.now();

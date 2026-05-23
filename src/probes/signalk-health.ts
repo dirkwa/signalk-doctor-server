@@ -1,6 +1,12 @@
 import type { ProbeResult } from './types.js';
 
-const SIGNALK_URL = process.env.SIGNALK_URL ?? 'http://127.0.0.1:3000/signalk';
+// 127.0.0.1 is wrong from inside this container — the doctor runs in
+// its own netns, so loopback never reaches signalk-server. Podman wires
+// `host.containers.internal` into /etc/hosts as the host gateway; that
+// works whether signalk-server uses Network=host or a PublishPort. The
+// env var lets the installer or a developer override (e.g. dev runs
+// where the engine isn't containerised).
+const SIGNALK_URL = process.env.SIGNALK_URL ?? 'http://host.containers.internal:3000/signalk';
 
 export async function probeSignalkHealth(): Promise<ProbeResult> {
   const t0 = Date.now();
