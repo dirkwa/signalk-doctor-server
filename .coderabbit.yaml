@@ -7,26 +7,26 @@ reviews:
     auto_incremental_review: true
     drafts: false
     ignore_title_keywords:
-      - "chore(release):"
-      - "chore(deps):"
-      - "chore(deps-dev):"
-      - "[skip review]"
-      - "WIP"
+      - 'chore(release):'
+      - 'chore(deps):'
+      - 'chore(deps-dev):'
+      - '[skip review]'
+      - 'WIP'
     ignore_usernames:
-      - "release-please[bot]"
-      - "renovate[bot]"
-      - "dependabot[bot]"
-      - "github-actions[bot]"
+      - 'release-please[bot]'
+      - 'renovate[bot]'
+      - 'dependabot[bot]'
+      - 'github-actions[bot]'
 
   path_filters:
-    - "!**/package-lock.json"
-    - "!**/yarn.lock"
-    - "!**/pnpm-lock.yaml"
-    - "!**/*.min.js"
-    - "!**/*.min.css"
-    - "!**/dist/**"
-    - "!**/build/**"
-    - "!**/node_modules/**"
+    - '!**/package-lock.json'
+    - '!**/yarn.lock'
+    - '!**/pnpm-lock.yaml'
+    - '!**/*.min.js'
+    - '!**/*.min.css'
+    - '!**/dist/**'
+    - '!**/build/**'
+    - '!**/node_modules/**'
 
   high_level_summary_instructions: |
     Write summaries in present tense. Describe what the code does, not what
