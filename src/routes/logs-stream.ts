@@ -139,14 +139,15 @@ export async function registerLogStreamRoutes(app: FastifyInstance): Promise<voi
       // timestamps from the broker — not worth the complexity given
       // the handoff window is sub-millisecond in practice and the
       // dropped line is by definition identical to one already shown.
-      const lastHistory = history.length > 0 ? history[history.length - 1] : null;
+      const lastHistory = history[history.length - 1];
       let drainStart = 0;
-      if (lastHistory !== null) {
+      if (lastHistory !== undefined) {
         const idx = buffered.lastIndexOf(lastHistory);
         if (idx !== -1) drainStart = idx + 1;
       }
       for (let i = drainStart; i < buffered.length; i++) {
-        reply.raw.write(`data: ${buffered[i]}\n\n`);
+        const line = buffered[i];
+        if (line !== undefined) reply.raw.write(`data: ${line}\n\n`);
       }
       buffered.length = 0;
       liveMode = true;
