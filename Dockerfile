@@ -20,9 +20,12 @@ FROM node:24-trixie-slim AS build
 WORKDIR /app
 COPY package.json ./
 RUN npm install --include=dev --no-audit --no-fund --loglevel=warn
-COPY tsconfig.json ./
+COPY tsconfig.json tsconfig.webapp.json vite.config.ts ./
 COPY src ./src
-RUN npx tsc -p tsconfig.json
+COPY webapp ./webapp
+RUN npx tsc -p tsconfig.json \
+ && npx tsc -p tsconfig.webapp.json \
+ && npx vite build
 
 FROM node:24-trixie-slim AS deps
 WORKDIR /app
@@ -48,7 +51,7 @@ RUN apt-get update \
 
 COPY --from=deps  /app/node_modules ./node_modules
 COPY --from=build /app/dist          ./dist
-COPY webapp                          ./webapp
+COPY --from=build /app/webapp-dist   ./webapp-dist
 COPY package.json                    ./
 
 EXPOSE 3004
