@@ -85,6 +85,8 @@ Tag `vX.Y.Z` triggers `.github/workflows/publish.yml` which builds a multi-arch 
 | `src/routes/session.ts`                                                                                               | `GET /api/session` (returns the bearer token from `/data/token`).                                                            |
 | `src/routes/probes.ts`                                                                                                | `GET /api/probes`.                                                                                                           |
 | `src/routes/recover.ts`                                                                                               | `GET /api/snapshots`, `GET /api/last-good`, `POST /api/recover{,/updater}`.                                                  |
+| `src/routes/self.ts`                                                                                                  | `GET /api/self/check-update` (read-only GHCR check; the doctor never self-updates).                                          |
+| `src/ghcr.ts`, `src/tagClassifier.ts`                                                                                 | GHCR registry client + tag channel classifier. Copy of the same files in signalk-updater-server.                             |
 | `src/routes/logs-stream.ts`                                                                                           | `GET /api/containers/:name/logs/stream` (SSE) + `/logs` (snapshot).                                                          |
 | `webapp/`                                                                                                             | Browser UI (React + reactstrap, bundled Bootstrap 5, dual color modes).                                                      |
 | `webapp/src/App.tsx`                                                                                                  | Hash-routed tab shell. Views: Health / Logs / Snapshots / Recovery.                                                          |
@@ -106,6 +108,15 @@ Tag `vX.Y.Z` triggers `.github/workflows/publish.yml` which builds a multi-arch 
 | `~/.config/containers/systemd`      | `/quadlets`            | rw   | Quadlet reads + atomic writes (CC-1 snapshots). |
 | `/run/user/$UID/bus`                | `/host/dbus`           | ro   | `busctl --user` against the host session bus.   |
 | `~/.signalk-updater`                | `/updater-data`        | ro   | Shared `operation.lock` only (CC-5).            |
+
+## Self-update flow
+
+The doctor is **read-mostly by design** and never updates itself from its own UI. The relevant pieces:
+
+- **`GET /api/self/check-update`** in `src/routes/self.ts` queries GHCR for the latest stable tag of `ghcr.io/dirkwa/signalk-doctor-server`, compares to the engine's running version (loaded from the container's own `package.json` at boot, same pattern as `health.ts`), and returns `{ current, latest, updateAvailable, cachedAt, updateVia: "signalk-updater-server" }`. Unauthenticated per CC-2 (it's read-only and just hits a public registry).
+- **No `POST /api/self/update` route here.** The actual pull + Quadlet rewrite + restart happens in [signalk-updater-server](https://github.com/dirkwa/signalk-updater-server) via `POST /api/doctor/update` (planned — see [engine-updates plan](https://github.com/dirkwa/signalk-universal-installer/blob/main/plans/engine-updates.md)). The updater is the only container with rw access to `/quadlets` for the doctor's Quadlet; the doctor cannot rewrite its own Quadlet anyway.
+- **`webapp/src/components/UpdateBanner.tsx`** renders a small "newer version available" alert on top of every view when `updateAvailable === true`, with a button to the Updater Console. The Doctor Console never offers a self-update button.
+- **GHCR helpers (`src/ghcr.ts`, `src/tagClassifier.ts`)** are deliberately a copy of the same files in signalk-updater-server. They classify image tags into stable/beta/master/dirkwa channels and pick the highest semver via `compareSemver`. Same problem, same solution — keep them aligned.
 
 ## Webapp
 
