@@ -91,7 +91,6 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     headers: buildHeaders(init),
   });
-  if (res.status === 204) return null as T;
   const text = await res.text();
   let body: unknown = null;
   if (text) {

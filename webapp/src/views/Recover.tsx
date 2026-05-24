@@ -44,9 +44,16 @@ export function Recover() {
       setResult(JSON.stringify(out, null, 2));
       setResultKind('ok');
     } catch (err) {
-      const e = err as ApiError;
-      const lines = [`Recovery (${target}) failed:`, e.message];
-      if (e.body) lines.push('', JSON.stringify(e.body, null, 2));
+      const lines = [`Recovery (${target}) failed:`];
+      if (err instanceof Error) {
+        lines.push(err.message);
+        const body = (err as ApiError).body;
+        if (body !== undefined && body !== null) {
+          lines.push('', JSON.stringify(body, null, 2));
+        }
+      } else {
+        lines.push(String(err));
+      }
       setResult(lines.join('\n'));
       setResultKind('err');
     } finally {

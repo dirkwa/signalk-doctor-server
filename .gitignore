@@ -6,3 +6,4 @@ webapp-dist/
 coverage/
 .env
 .env.local
+cr-review*.txt

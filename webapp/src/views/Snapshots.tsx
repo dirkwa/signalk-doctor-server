@@ -16,11 +16,19 @@ interface GroupedSnapshots {
   snaps: SnapshotEntry[];
 }
 
+// Snapshot files are named `<mangled-iso>-<quadlet>` by snapshotQuadlet()
+// in src/quadlet/rewriter.ts — the ISO timestamp has `:` and `.` replaced
+// by `-`, e.g. `2026-05-24T15-30-00-123Z-signalk-updater-server.container`.
+// Strip the timestamp prefix so files for the same quadlet group together;
+// a naive `/-(.*)$/` would match the last dash and lump unrelated
+// quadlets (e.g. signalk-server.container and signalk-updater-server.container)
+// under the same bucket.
+const TIMESTAMP_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}(?:-\d+)?Z?-/;
+
 function groupByQuadlet(resp: SnapshotsResponse): GroupedSnapshots[] {
   const grouped = new Map<string, SnapshotEntry[]>();
   for (const snap of resp.snapshots) {
-    const m = snap.name.match(/-(.*)$/);
-    const group = m && m[1] !== undefined ? m[1] : snap.name;
+    const group = snap.name.replace(TIMESTAMP_PREFIX, '') || snap.name;
     const bucket = grouped.get(group);
     if (bucket) bucket.push(snap);
     else grouped.set(group, [snap]);
