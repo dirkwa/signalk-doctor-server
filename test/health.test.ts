@@ -3,7 +3,7 @@ import { createServer } from '../src/server.js';
 
 describe('GET /api/health', () => {
   it('returns ok + runtime shape', async () => {
-    const app = await createServer();
+    const { app, driftScheduler } = await createServer();
     try {
       const res = await app.inject({ method: 'GET', url: '/api/health' });
       expect(res.statusCode).toBe(200);
@@ -18,6 +18,7 @@ describe('GET /api/health', () => {
       expect(typeof body.uptimeSeconds).toBe('number');
       expect(body.version).toMatch(/^(\d+\.\d+\.\d+|unknown)/);
     } finally {
+      driftScheduler.stop();
       await app.close();
     }
   });
