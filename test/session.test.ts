@@ -22,7 +22,7 @@ describe('GET /api/session', () => {
   });
 
   it('echoes back the bearer token for the SPA to use', async () => {
-    const app = await createServer();
+    const { app, driftScheduler } = await createServer();
     try {
       const res = await app.inject({ method: 'GET', url: '/api/session' });
       expect(res.statusCode).toBe(200);
@@ -33,6 +33,7 @@ describe('GET /api/session', () => {
       const body = res.json() as { token: string };
       expect(body.token).toBe('test-token-xyz');
     } finally {
+      driftScheduler.stop();
       await app.close();
     }
   });
@@ -43,7 +44,7 @@ describe('GET /api/session', () => {
     // than a hardcoded /tmp/... so the test doesn't depend on the
     // host environment.
     process.env.TOKEN_PATH = join(dir, 'this-file-does-not-exist');
-    const app = await createServer();
+    const { app, driftScheduler } = await createServer();
     try {
       const res = await app.inject({ method: 'GET', url: '/api/session' });
       expect(res.statusCode).toBe(503);
@@ -52,6 +53,7 @@ describe('GET /api/session', () => {
       // We must NOT leak the filesystem path back to the client.
       expect(body).not.toHaveProperty('detail');
     } finally {
+      driftScheduler.stop();
       await app.close();
       process.env.TOKEN_PATH = saved;
     }

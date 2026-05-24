@@ -9,6 +9,8 @@ import { registerProbeRoutes } from './routes/probes.js';
 import { registerRecoverRoutes } from './routes/recover.js';
 import { registerLogStreamRoutes } from './routes/logs-stream.js';
 import { registerSelfRoutes } from './routes/self.js';
+import { registerDriftRoutes } from './routes/drift.js';
+import { DriftScheduler } from './drift/scheduler.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -18,12 +20,17 @@ const here = dirname(fileURLToPath(import.meta.url));
 // to the repo root, picking up `webapp-dist/` from `npm run build:webapp`.
 const WEBAPP_ROOT = process.env.WEBAPP_ROOT ?? resolve(here, '..', 'webapp-dist');
 
-export async function createServer(): Promise<FastifyInstance> {
+export async function createServer(): Promise<{
+  app: FastifyInstance;
+  driftScheduler: DriftScheduler;
+}> {
   const app = Fastify({
     logger: {
       level: process.env.LOG_LEVEL ?? 'info',
     },
   });
+
+  const driftScheduler = new DriftScheduler(app.log);
 
   // API routes first so they take precedence over the static fallback.
   await registerHealthRoutes(app);
@@ -32,6 +39,7 @@ export async function createServer(): Promise<FastifyInstance> {
   await registerRecoverRoutes(app);
   await registerLogStreamRoutes(app);
   await registerSelfRoutes(app);
+  await registerDriftRoutes(app, driftScheduler);
 
   // Serve the webapp at /. Without this, opening the Doctor Console URL
   // in a browser hits Fastify's default 404 for GET /.
@@ -43,5 +51,5 @@ export async function createServer(): Promise<FastifyInstance> {
     });
   }
 
-  return app;
+  return { app, driftScheduler };
 }

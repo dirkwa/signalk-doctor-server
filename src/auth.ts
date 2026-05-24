@@ -1,16 +1,25 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { readFile } from 'node:fs/promises';
 
-const TOKEN_PATH = process.env.TOKEN_PATH ?? '/data/token';
+// Resolved at request time so tests can swap the path between server
+// instances. The cache key is also the path, so a rotated path drops the
+// cached token (otherwise rotation would silently keep accepting the
+// previous file's value).
+function tokenPath(): string {
+  return process.env.TOKEN_PATH ?? '/data/token';
+}
 
 let cachedToken: string | null = null;
+let cachedFromPath: string | null = null;
 
 async function loadToken(): Promise<string | null> {
-  if (cachedToken) return cachedToken;
+  const path = tokenPath();
+  if (cachedToken && cachedFromPath === path) return cachedToken;
   try {
-    const raw = (await readFile(TOKEN_PATH, 'utf8')).trim();
+    const raw = (await readFile(path, 'utf8')).trim();
     if (raw.length > 0) {
       cachedToken = raw;
+      cachedFromPath = path;
       return raw;
     }
   } catch {
@@ -44,4 +53,5 @@ export async function requireToken(req: FastifyRequest, reply: FastifyReply): Pr
 
 export function __resetTokenCacheForTests(): void {
   cachedToken = null;
+  cachedFromPath = null;
 }
