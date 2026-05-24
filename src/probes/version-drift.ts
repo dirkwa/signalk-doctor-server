@@ -46,7 +46,9 @@ function isFixedVersionTag(tag: string): boolean {
 function tagOf(image: string | null): string | null {
   if (!image) return null;
   // Strip optional @sha256:… digest first, then take after the last colon.
-  const noDigest = image.split('@')[0];
+  // String.split always returns at least one element; the `?? image` keeps
+  // strict-TS noUncheckedIndexedAccess happy without a non-null assert.
+  const noDigest = image.split('@')[0] ?? image;
   const colon = noDigest.lastIndexOf(':');
   // Guard against IPv6-shaped registry prefixes (no current path uses them,
   // but `:` may also appear in the registry host like host:5000/foo:tag).

@@ -21,9 +21,9 @@ async function loadToken(): Promise<string | null> {
 
 function extractToken(req: FastifyRequest): string | null {
   const auth = req.headers.authorization;
-  if (auth && /^Bearer\s+(.+)$/i.test(auth)) {
+  if (auth) {
     const m = auth.match(/^Bearer\s+(.+)$/i);
-    if (m) return m[1].trim();
+    if (m && m[1]) return m[1].trim();
   }
   const xauth = req.headers['x-sk-auth'];
   if (typeof xauth === 'string' && xauth.length > 0) return xauth.trim();
