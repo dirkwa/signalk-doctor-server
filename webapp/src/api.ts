@@ -151,6 +151,20 @@ export function logsStreamUrl(name: string, tail: number): string {
   return `${API_BASE}/containers/${encodeURIComponent(name)}/logs/stream?tail=${tail}`;
 }
 
+export interface CheckUpdateResponse {
+  current: string;
+  latest?: string;
+  updateAvailable: boolean;
+  cachedAt?: string;
+  /** Where to perform the actual self-update (the doctor never updates itself). */
+  updateVia: string;
+  error?: string;
+}
+
+export function getCheckUpdate(): Promise<CheckUpdateResponse> {
+  return request<CheckUpdateResponse>('/self/check-update');
+}
+
 // ── Formatting helpers ──────────────────────────────────────
 
 export function fmtTime(iso: string | null | undefined): string {
