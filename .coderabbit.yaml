@@ -111,9 +111,15 @@ reviews:
         - `"type": "module"` — all imports use the `.js` suffix for
           relative paths (NodeNext resolution). Do not suggest dropping
           the suffix.
-        - tsconfig is strict. Avoid `any`. Prefer narrowing with
-          `unknown` + runtime checks at boundaries (HTTP request bodies,
-          child-process stdout, dockerode responses).
+        - tsconfig is strict with the full extra set on:
+          `noUncheckedIndexedAccess`, `noImplicitReturns`,
+          `noFallthroughCasesInSwitch`, `noImplicitOverride`. Code MUST
+          narrow against `undefined` when reading array slots or record
+          entries. Flag patterns like `arr[i].foo` without a prior
+          `if (arr[i] !== undefined)` check.
+        - Avoid `any`. Prefer narrowing with `unknown` + runtime checks
+          at boundaries (HTTP request bodies, child-process stdout,
+          dockerode responses).
         - Node `>= 24` per `engines`. Native fetch is fine. Codebase
           convention: named imports from `fs/promises`. Don't suggest
           the `node:` prefix — the project deliberately doesn't use it.
@@ -131,9 +137,13 @@ reviews:
 
         ## API conventions
 
-        - Fastify. TypeBox schemas validate every route body. Define the
-          schema in `schemas/` and pass it via the route options. Don't
-          hand-parse `request.body`.
+        - Fastify. Routes are registered as `app.get(...)` / `app.post(...)`
+          plus a `preHandler` for auth where applicable. **The doctor
+          does NOT use TypeBox / Fastify schemas** — most routes are
+          read-only and the two mutating POSTs take no body. Do NOT
+          suggest adding `schemas/`, TypeBox, or per-route validation
+          unless the PR introduces a new route that takes a non-trivial
+          body.
         - Throwing in a route handler funnels through Fastify's error
           handler — don't try/catch + re-respond, just throw a typed
           error from `src/errors.ts` (CC-6).
@@ -147,10 +157,10 @@ reviews:
           0600). Any new credential storage MUST follow the same pattern:
           explicit mode on `writeFile` + a post-chmod for pre-existing
           files.
-        - Logger is `pino`. Any new code that logs settings or HTTP
-          bodies MUST use `logger.child(...)` or the root `logger` —
-          DO NOT instantiate a fresh `pino(...)` because it bypasses the
-          redact config. Never log the bearer token.
+        - Logger is `pino`. Use the existing Fastify logger
+          (`app.log` / `req.log` / `logger.child(...)`) rather than
+          instantiating a fresh `pino(...)`. Never log the bearer token
+          or any field that might contain it (e.g. `req.headers`).
 
         ## podman / dockerode
 
@@ -165,13 +175,43 @@ reviews:
         ## DBus / systemctl
 
         - The container calls `systemctl --user daemon-reload` and
-          related via DBus on `/host/dbus` (mounted read-only at runtime
-          per the Phase 5 mounts table). Use `@homebridge/dbus-native`
-          or equivalent — don't shell out to `dbus-send` and don't ship
-          systemd binaries in the image.
+          related via the host session bus mounted read-only at
+          `/host/dbus`. We use `busctl` shelled-out (from the `systemd`
+          apt package included in the runtime image), NOT
+          `@homebridge/dbus-native` or any JS DBus library. Rationale
+          is documented in `src/dbus/systemd-user.ts` — JS DBus libs
+          send `process.getuid()` in the EXTERNAL handshake, which the
+          host bus rejects under rootless userns. Do NOT suggest
+          replacing `busctl` with a JS DBus library.
         - DBus calls are mutating operations and must respect CC-5 (the
           shared operation lock) and CC-2 (auth on the route that
           triggers them).
+        - All `busctl` invocations go through `src/dbus/systemd-user.ts`
+          via `spawn` with an explicit timeout. Don't fork a new shell
+          helper.
+
+        ## Webapp (React + reactstrap, bundled Bootstrap 5)
+
+        - The webapp lives at `webapp/` and builds to `webapp-dist/` via
+          Vite. Bootstrap 5 CSS is imported in `webapp/src/main.tsx` and
+          bundled directly — the doctor-server is a STANDALONE container
+          on port 3004, not embedded in signalk-server, so it canNOT
+          fetch `/admin/.vite/manifest.json` like the `signalk-backup`
+          plugin does. Do NOT suggest admin-CSS injection.
+        - Dark/light mode comes from `prefers-color-scheme` applied via
+          `data-bs-theme` on `<html>`. There is no UI toggle. Don't
+          suggest adding one.
+        - API base is `/api` (same origin). Bearer is attached on ANY
+          non-GET request (matches CC-2 — GETs stay unauthenticated by
+          design). The token is loaded once at boot via
+          `loadSession()`.
+        - State management: hash-routed tabs + per-view `useApi` hook.
+          No Redux, no Zustand, no router lib. Don't suggest adding
+          one.
+        - SSE log streaming uses `useLogStream`, which already handles
+          pause/resume, document-visibility suspend, and EventSource
+          auto-reconnect. New log-related work should reuse the hook,
+          not roll a parallel EventSource lifecycle.
 
         ## Echo comments
 
@@ -234,10 +274,26 @@ reviews:
         - Snapshot-before-write on every Quadlet mutation — see CC-1.
         - The "code twin" overlap with signalk-updater-server (same
           Fastify factory, same `podman/client.ts`, same `errors.ts`) —
-          documented in AGENTS.md.
+          documented in AGENTS.md. Twins-at-the-skeleton-level only;
+          the doctor specifically diverges on web-framework conventions
+          (no TypeBox, no schemas/ directory) and on DBus (busctl
+          shell-out, not a JS lib).
         - `Restart=on-failure` instead of `Restart=always` in Quadlet
           snippets — required by CC-4.
         - The shared `~/.signalk-updater/operation.lock` despite this
           being the doctor repo — that's the single-writer mutex (CC-5).
         - Read-only mount of `~/.signalk-updater` at `/updater-data` —
           deliberate; only the lock file is needed.
+        - `busctl` shelled-out for DBus calls instead of a JS DBus lib —
+          required for the EXTERNAL UID handshake under rootless userns.
+        - No TypeBox / no `src/schemas/` directory — most routes are
+          GETs and the two mutating POSTs take no body. Routes don't
+          need schema validation here.
+        - The doctor-server webapp bundles Bootstrap 5 directly instead
+          of injecting `/admin/.vite/manifest.json` like the
+          `signalk-backup` plugin does — required because this container
+          is standalone on `:3004`, NOT mounted inside signalk-server.
+        - No UI dark/light toggle — `prefers-color-scheme` is the only
+          input, mirroring the SignalK admin's own behavior.
+        - Debian trixie-slim base image instead of Alpine — the runtime
+          stage needs the systemd apt package for `busctl`.
