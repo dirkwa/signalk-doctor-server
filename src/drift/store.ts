@@ -33,10 +33,26 @@ async function writeAtomic(filePath: string, body: string): Promise<void> {
   await fsyncDir(dirname(filePath));
 }
 
+function isDriftReport(value: unknown): value is DriftReport {
+  if (!value || typeof value !== 'object') return false;
+  const v = value as Partial<DriftReport>;
+  return (
+    (typeof v.signalkImageTag === 'string' || v.signalkImageTag === null) &&
+    typeof v.lastScannedAt === 'string' &&
+    (typeof v.lastSuccessfulScanAt === 'string' || v.lastSuccessfulScanAt === null) &&
+    typeof v.online === 'boolean' &&
+    Array.isArray(v.packages)
+  );
+}
+
 export async function loadDriftReport(): Promise<DriftReport | null> {
+  // Validate at the disk boundary: a stale or hand-edited file could be
+  // malformed-but-valid-JSON. Returning null on that path lets the scanner
+  // recompute from scratch instead of crashing on a missing `packages` array.
   try {
     const raw = await readFile(driftPath(), 'utf8');
-    return JSON.parse(raw) as DriftReport;
+    const parsed = JSON.parse(raw) as unknown;
+    return isDriftReport(parsed) ? parsed : null;
   } catch {
     return null;
   }

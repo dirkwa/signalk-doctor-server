@@ -7,21 +7,24 @@ import { readFile } from 'node:fs/promises';
 const SIGNALK_TOKEN_PATH = process.env.SIGNALK_TOKEN_PATH ?? '/data/signalk-token';
 
 let cached: string | null = null;
-let cacheLoaded = false;
 
 export async function getSignalkAdminToken(): Promise<string | null> {
-  if (cacheLoaded) return cached;
+  // Only cache a successful, non-empty read. A failed read or empty file
+  // must NOT become permanent — otherwise the bash installer racing this
+  // scheduler's first scan would lock us into no-token until restart.
+  if (cached !== null) return cached;
   try {
     const raw = (await readFile(SIGNALK_TOKEN_PATH, 'utf8')).trim();
-    cached = raw.length > 0 ? raw : null;
+    if (raw.length > 0) {
+      cached = raw;
+      return cached;
+    }
   } catch {
-    cached = null;
+    // fall through to return null
   }
-  cacheLoaded = true;
-  return cached;
+  return null;
 }
 
 export function invalidateSignalkAdminTokenCache(): void {
   cached = null;
-  cacheLoaded = false;
 }

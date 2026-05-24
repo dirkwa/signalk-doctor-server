@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdtemp, writeFile, chmod, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from '../src/server.js';
@@ -33,7 +33,8 @@ describe('drift routes', () => {
     dir = await mkdtemp(join(tmpdir(), 'drift-routes-'));
     process.env.DOCTOR_DATA = dir;
     const tokenPath = join(dir, 'token');
-    await writeFile(tokenPath, 'sekret\n', 'utf8');
+    await writeFile(tokenPath, 'sekret\n', { encoding: 'utf8', mode: 0o600 });
+    await chmod(tokenPath, 0o600);
     process.env.TOKEN_PATH = tokenPath;
     __resetTokenCacheForTests();
     await saveDriftReport(FIXTURE);
