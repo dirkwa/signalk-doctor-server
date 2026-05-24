@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { existsSync } from 'node:fs';
 import { registerHealthRoutes } from './routes/health.js';
 import { registerSessionRoutes } from './routes/session.js';
@@ -8,9 +9,13 @@ import { registerProbeRoutes } from './routes/probes.js';
 import { registerRecoverRoutes } from './routes/recover.js';
 import { registerLogStreamRoutes } from './routes/logs-stream.js';
 
-// Webapp directory inside the container image. Build copies webapp/ to
-// /app/webapp; the env var lets dev mode point at the source tree.
-const WEBAPP_ROOT = process.env.WEBAPP_ROOT ?? '/app/webapp';
+const here = dirname(fileURLToPath(import.meta.url));
+
+// Webapp build output directory. In the container, dist/server.js runs
+// from /app/dist so `..` resolves to /app, matching the Dockerfile's
+// COPY destination. In dev (`tsx watch src/server.ts`), `..` resolves
+// to the repo root, picking up `webapp-dist/` from `npm run build:webapp`.
+const WEBAPP_ROOT = process.env.WEBAPP_ROOT ?? resolve(here, '..', 'webapp-dist');
 
 export async function createServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -27,9 +32,7 @@ export async function createServer(): Promise<FastifyInstance> {
   await registerLogStreamRoutes(app);
 
   // Serve the webapp at /. Without this, opening the Doctor Console URL
-  // in a browser hits Fastify's default 404 for GET / — confusing UX.
-  // The placeholder index.html will be replaced by a real Vite+React
-  // build in a later phase; this just lays down the route.
+  // in a browser hits Fastify's default 404 for GET /.
   if (existsSync(WEBAPP_ROOT)) {
     await app.register(fastifyStatic, {
       root: resolve(WEBAPP_ROOT),
