@@ -8,6 +8,7 @@ import { registerSessionRoutes } from './routes/session.js';
 import { registerProbeRoutes } from './routes/probes.js';
 import { registerRecoverRoutes } from './routes/recover.js';
 import { registerLogStreamRoutes } from './routes/logs-stream.js';
+import { registerSelfRoutes } from './routes/self.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -30,6 +31,7 @@ export async function createServer(): Promise<FastifyInstance> {
   await registerProbeRoutes(app);
   await registerRecoverRoutes(app);
   await registerLogStreamRoutes(app);
+  await registerSelfRoutes(app);
 
   // Serve the webapp at /. Without this, opening the Doctor Console URL
   // in a browser hits Fastify's default 404 for GET /.
