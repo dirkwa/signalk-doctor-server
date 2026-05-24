@@ -5,6 +5,7 @@ import { Health } from './views/Health';
 import { Logs } from './views/Logs';
 import { Snapshots } from './views/Snapshots';
 import { Recover } from './views/Recover';
+import { UpdateBanner } from './components/UpdateBanner';
 
 type Route = 'health' | 'logs' | 'snapshots' | 'recover';
 
@@ -72,6 +73,8 @@ export function App() {
         </span>
         <span className="ms-auto text-muted small font-monospace">v{__APP_VERSION__}</span>
       </div>
+
+      <UpdateBanner updaterUrl={updaterUrl} />
 
       <Nav tabs className="mb-3 align-items-end">
         {ROUTES.map((r) => (
