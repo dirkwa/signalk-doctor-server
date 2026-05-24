@@ -94,9 +94,7 @@ export async function runDriftScan(): Promise<ScanOutcome> {
   // newImageTag means the container couldn't be inspected this tick (no
   // podman socket, transient outage), which must NOT wipe the cache.
   const imageChanged =
-    prior?.signalkImageTag != null &&
-    newImageTag != null &&
-    prior.signalkImageTag !== newImageTag;
+    prior?.signalkImageTag != null && newImageTag != null && prior.signalkImageTag !== newImageTag;
   const baseReport: DriftReport | null = imageChanged ? null : prior;
 
   const installedRes = await fetchInstalledPackages();
