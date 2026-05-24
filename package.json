@@ -13,9 +13,13 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "rimraf dist && tsc -p tsconfig.json",
+    "build:server": "rimraf dist && tsc -p tsconfig.json",
+    "build:webapp": "rimraf webapp-dist && vite build",
+    "typecheck:webapp": "tsc -p tsconfig.webapp.json",
+    "build": "npm run build:server && npm run typecheck:webapp && npm run build:webapp",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
+    "dev:webapp": "vite",
     "test": "vitest run",
     "lint": "eslint src --max-warnings 0",
     "format": "prettier --write . && eslint src --fix",
@@ -29,18 +33,26 @@
     "pino": "^10.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.0",
     "@types/dockerode": "^4.0.0",
     "@types/node": "^24.0.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "@eslint/js": "^10.0.0",
+    "@vitejs/plugin-react": "^6.0.1",
+    "bootstrap": "^5.3.8",
     "eslint": "^10.0.0",
     "globals": "^17.0.0",
     "prettier": "^3.3.0",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "reactstrap": "^9.2.3",
     "rimraf": "^6.0.1",
     "supertest": "^7.0.0",
     "tsx": "^4.19.0",
     "typescript": "^6.0.0",
+    "vite": "^8.0.11",
     "vitest": "^4.0.0"
   }
 }
