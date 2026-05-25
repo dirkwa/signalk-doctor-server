@@ -1,5 +1,5 @@
 import { resolveRuntime, safe } from '../podman/client.js';
-import { fetchInstalledPackages, type InstalledPackage } from './installed-packages.js';
+import { fetchDiagnostics, type InstalledPackage } from './diagnostics.js';
 import { getLatestVersion, type NpmRegistryResult } from './npm-registry.js';
 import { classify } from './classify.js';
 import { loadDriftReport, saveDriftReport } from './store.js';
@@ -97,8 +97,8 @@ export async function runDriftScan(): Promise<ScanOutcome> {
     prior?.signalkImageTag != null && newImageTag != null && prior.signalkImageTag !== newImageTag;
   const baseReport: DriftReport | null = imageChanged ? null : prior;
 
-  const installedRes = await fetchInstalledPackages();
-  if (!installedRes.ok) {
+  const diagnosticsRes = await fetchDiagnostics();
+  if (!diagnosticsRes.ok) {
     const report: DriftReport = {
       signalkImageTag: newImageTag,
       lastScannedAt: nowIso,
@@ -111,13 +111,13 @@ export async function runDriftScan(): Promise<ScanOutcome> {
     return {
       report,
       online: false,
-      installedFetchError: `${installedRes.reason}: ${installedRes.detail}`,
+      installedFetchError: `${diagnosticsRes.reason}: ${diagnosticsRes.detail}`,
     };
   }
 
   const packages: DriftPackage[] = [];
   let anyOnline = false;
-  for (const installed of installedRes.packages) {
+  for (const installed of diagnosticsRes.diagnostics.packages) {
     const priorPkg = priorEntry(baseReport, installed.name);
     const registry = await getLatestVersion(installed.name, priorPkg?.etag ?? null);
     if (registry.kind === 'fetched' || registry.kind === 'not-modified') {
