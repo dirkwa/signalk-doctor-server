@@ -51,7 +51,10 @@ export async function fetchDiagnostics(): Promise<DiagnosticsResult> {
     if (!res.ok) {
       return { ok: false, reason: 'http', detail: `HTTP ${res.status} from ${url}` };
     }
-    const body = (await res.json()) as { packages?: unknown };
+    const body = (await res.json()) as { packages?: unknown } | null;
+    if (!body || typeof body !== 'object') {
+      return { ok: false, reason: 'bad-payload', detail: 'response is not a JSON object' };
+    }
     if (!Array.isArray(body.packages)) {
       return { ok: false, reason: 'bad-payload', detail: 'response missing `packages` array' };
     }
