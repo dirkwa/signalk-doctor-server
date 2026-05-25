@@ -1,7 +1,7 @@
 import { getSignalkAdminToken, invalidateSignalkAdminTokenCache } from './signalk-token.js';
 
 // Same env override the existing signalk-health probe uses; we strip the
-// `/signalk` suffix because the new admin route lives under `/skServer`.
+// `/signalk` suffix because the diagnostics route lives under `/skServer`.
 function signalkBase(): string {
   const url = process.env.SIGNALK_URL ?? 'http://host.containers.internal:3000/signalk';
   return url.replace(/\/signalk\/?$/, '');
@@ -12,11 +12,20 @@ export interface InstalledPackage {
   version: string;
 }
 
-export type InstalledPackagesResult =
-  | { ok: true; packages: InstalledPackage[] }
+/** Mirror of signalk-server's Diagnostics envelope — an object with a
+ *  `packages` array of {name, version}. The envelope shape leaves room
+ *  for sibling diagnostic fields (runtime info, memory, etc.) to land
+ *  without new endpoints, mirroring the upstream contract added in
+ *  SignalK/signalk-server#2702. */
+export interface Diagnostics {
+  packages: InstalledPackage[];
+}
+
+export type DiagnosticsResult =
+  | { ok: true; diagnostics: Diagnostics }
   | { ok: false; reason: 'no-token' | 'auth' | 'network' | 'http' | 'bad-payload'; detail: string };
 
-export async function fetchInstalledPackages(): Promise<InstalledPackagesResult> {
+export async function fetchDiagnostics(): Promise<DiagnosticsResult> {
   const token = await getSignalkAdminToken();
   if (!token) {
     return {
@@ -26,7 +35,7 @@ export async function fetchInstalledPackages(): Promise<InstalledPackagesResult>
     };
   }
 
-  const url = `${signalkBase()}/skServer/installedPackages`;
+  const url = `${signalkBase()}/skServer/diagnostics`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
@@ -42,7 +51,10 @@ export async function fetchInstalledPackages(): Promise<InstalledPackagesResult>
     if (!res.ok) {
       return { ok: false, reason: 'http', detail: `HTTP ${res.status} from ${url}` };
     }
-    const body = (await res.json()) as { packages?: unknown };
+    const body = (await res.json()) as { packages?: unknown } | null;
+    if (!body || typeof body !== 'object') {
+      return { ok: false, reason: 'bad-payload', detail: 'response is not a JSON object' };
+    }
     if (!Array.isArray(body.packages)) {
       return { ok: false, reason: 'bad-payload', detail: 'response missing `packages` array' };
     }
@@ -60,7 +72,7 @@ export async function fetchInstalledPackages(): Promise<InstalledPackagesResult>
         packages.push({ name: e.name, version: e.version });
       }
     }
-    return { ok: true, packages };
+    return { ok: true, diagnostics: { packages } };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, reason: 'network', detail: msg };
