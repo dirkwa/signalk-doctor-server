@@ -5,15 +5,17 @@ import { Health } from './views/Health';
 import { Logs } from './views/Logs';
 import { Snapshots } from './views/Snapshots';
 import { Recover } from './views/Recover';
+import { Installer } from './views/Installer';
 import { UpdateBanner } from './components/UpdateBanner';
 
-type Route = 'health' | 'logs' | 'snapshots' | 'recover';
+type Route = 'health' | 'logs' | 'snapshots' | 'recover' | 'installer';
 
 const ROUTES: { id: Route; label: string }[] = [
   { id: 'health', label: 'Health' },
   { id: 'logs', label: 'Logs' },
   { id: 'snapshots', label: 'Snapshots' },
   { id: 'recover', label: 'Recovery' },
+  { id: 'installer', label: 'Installer' },
 ];
 
 function parseHash(hash: string): Route {
@@ -102,6 +104,7 @@ export function App() {
       {route === 'logs' && <Logs />}
       {route === 'snapshots' && <Snapshots />}
       {route === 'recover' && <Recover />}
+      {route === 'installer' && <Installer />}
     </Container>
   );
 }

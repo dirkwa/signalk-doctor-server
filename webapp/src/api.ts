@@ -165,6 +165,57 @@ export function getCheckUpdate(): Promise<CheckUpdateResponse> {
   return request<CheckUpdateResponse>('/self/check-update');
 }
 
+// ── Installer-refresh types + calls ─────────────────────────
+
+export type InstallerArtifactKind = 'host-script' | 'quadlet-template' | 'detect-script';
+
+export type InstallerArtifactStatus =
+  | 'updated'
+  | 'unchanged'
+  | 'mount-missing'
+  | 'fetch-failed'
+  | 'write-failed';
+
+export interface InstallerStatusArtifact {
+  id: string;
+  kind: InstallerArtifactKind;
+  destPath: string;
+  present: boolean;
+  sha256?: string;
+  mtime?: string;
+}
+
+export interface InstallerStatusResponse {
+  hostBinMounted: boolean;
+  pagesBase: string;
+  artifacts: InstallerStatusArtifact[];
+}
+
+export interface InstallerRefreshResult {
+  id: string;
+  kind: InstallerArtifactKind;
+  status: InstallerArtifactStatus;
+  sha256?: string;
+  snapshotPath?: string;
+  message?: string;
+}
+
+export interface InstallerRefreshResponse {
+  startedAt: string;
+  finishedAt: string;
+  pagesBase: string;
+  results: InstallerRefreshResult[];
+  counts: Record<InstallerArtifactStatus, number>;
+}
+
+export function getInstallerStatus(): Promise<InstallerStatusResponse> {
+  return request<InstallerStatusResponse>('/installer/status');
+}
+
+export function refreshInstaller(): Promise<InstallerRefreshResponse> {
+  return request<InstallerRefreshResponse>('/installer/refresh', { method: 'POST' });
+}
+
 // ── Formatting helpers ──────────────────────────────────────
 
 export function fmtTime(iso: string | null | undefined): string {
