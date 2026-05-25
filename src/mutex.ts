@@ -1,7 +1,13 @@
 import { open, rename, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 
-export type Operation = 'switch' | 'rollback' | 'self-update' | 'hardware-apply' | 'recover';
+export type Operation =
+  | 'switch'
+  | 'rollback'
+  | 'self-update'
+  | 'hardware-apply'
+  | 'recover'
+  | 'installer-refresh';
 
 export interface LockInfo {
   owner: 'updater' | 'doctor';
@@ -11,9 +17,15 @@ export interface LockInfo {
 }
 
 // The lock lives under the updater's data directory; the doctor mounts that
-// directory as /updater-data (rw) so both engines can write to the shared lock.
-const LOCK_DIR = process.env.LOCK_DIR ?? '/updater-data';
-const LOCK_PATH = process.env.OPERATION_LOCK ?? join(LOCK_DIR, 'operation.lock');
+// directory as /updater-data (rw) so both engines can write to the shared
+// lock. Resolved lazily so tests can swap LOCK_DIR / OPERATION_LOCK between
+// cases; in production the env vars are set once by the systemd-user unit
+// and never change.
+function lockPath(): string {
+  if (process.env.OPERATION_LOCK) return process.env.OPERATION_LOCK;
+  const dir = process.env.LOCK_DIR ?? '/updater-data';
+  return join(dir, 'operation.lock');
+}
 
 async function writeAtomic(path: string, body: string): Promise<void> {
   const tmp = `${path}.${process.pid}.tmp`;
@@ -35,7 +47,7 @@ async function writeAtomic(path: string, body: string): Promise<void> {
 
 export async function readLock(): Promise<LockInfo | null> {
   try {
-    const fh = await open(LOCK_PATH, 'r');
+    const fh = await open(lockPath(), 'r');
     try {
       const text = (await fh.readFile()).toString('utf8');
       return JSON.parse(text) as LockInfo;
@@ -56,7 +68,7 @@ export class MutexBusyError extends Error {
 
 async function tryAcquire(info: LockInfo): Promise<boolean> {
   try {
-    const fh = await open(LOCK_PATH, 'wx', 0o600);
+    const fh = await open(lockPath(), 'wx', 0o600);
     try {
       const body = JSON.stringify(info);
       await fh.write(body);
@@ -94,7 +106,7 @@ export async function withMutex<T>(operation: Operation, fn: () => Promise<T>): 
     return await fn();
   } finally {
     try {
-      await unlink(LOCK_PATH);
+      await unlink(lockPath());
     } catch {
       // best-effort
     }
@@ -103,12 +115,12 @@ export async function withMutex<T>(operation: Operation, fn: () => Promise<T>): 
 
 export async function forceClear(): Promise<void> {
   try {
-    await unlink(LOCK_PATH);
+    await unlink(lockPath());
   } catch {
     // already clear
   }
 }
 
 export async function writeLockInfo(info: LockInfo): Promise<void> {
-  await writeAtomic(LOCK_PATH, JSON.stringify(info));
+  await writeAtomic(lockPath(), JSON.stringify(info));
 }
