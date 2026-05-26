@@ -124,11 +124,25 @@ The installer-refresh endpoint (`POST /api/installer/refresh`) is **not** a self
 
 ## Webapp
 
-- **React + reactstrap**, Bootstrap 5 bundled directly (no admin-CSS injection — this container is standalone on port 3004, not embedded inside signalk-server). The bundled approach intentionally diverges from the [signalk-backup](https://github.com/dirkwa/signalk-backup) pattern, which DOES inject the admin's stylesheet manifest because it runs at `/signalk-backup/` inside the SignalK server.
+- **React + reactstrap**, Bootstrap 5 bundled directly. The same bundle serves two surfaces (see "Two deployments, one bundle" below): standalone at `:3004`, and iframed by the [signalk-doctor](https://github.com/dirkwa/signalk-doctor) plugin into the SignalK admin sidebar.
 - **Dual color modes** via `data-bs-theme` driven by `matchMedia('(prefers-color-scheme: dark)')` in `webapp/src/theme.ts`. No in-UI toggle.
-- **Same-origin API calls** at `/api/*`. The Fastify host serves both the API and the static bundle from `webapp-dist/`. Dev mode runs Vite on `:5173` and proxies `/api` to a real doctor-server on `:3004`.
+- **API base via `<meta name="api-base">`.** `webapp/src/api.ts` is the single source of truth for the API base — it reads the meta tag at module load and exposes the resolved base for every network call. **All `fetch()` and `new EventSource()` must go through `api.ts`** (directly or via helpers like `logsStreamUrl`); a network call that hand-rolls a `/api/...` URL elsewhere will skip the prefix and break under the proxy. Standalone has no meta tag, so the base stays empty and paths remain `/api/*` exactly as before.
 - **Bearer attached on non-GET** in `webapp/src/api.ts`. Read-only GETs stay unauthenticated per CC-2.
 - **Feature parity, not feature creep**: a webapp PR that grows beyond Health/Logs/Snapshots/Recovery should justify the new surface in the description (probably a separate PR).
+
+## Two deployments, one bundle
+
+The same `webapp/` bundle serves two surfaces:
+
+1. **Standalone** at `http://<host>:3004/` — direct visit, Fastify serves the bundle, API at `/api/*`.
+2. **Embedded** at `https://<host>/admin/#/e/signalk_doctor` — the SignalK admin loads the [signalk-doctor](https://github.com/dirkwa/signalk-doctor) plugin's Module Federation remote, which renders an `<iframe>` pointing at the plugin's reverse proxy mounted under `/plugins/signalk-doctor/console/`. The proxy forwards to this engine container and injects `<meta name="api-base" content="/plugins/signalk-doctor/console">` into the HTML before serving it to the browser.
+
+Contract that keeps both surfaces working:
+
+- **`vite.config.ts` uses `base: './'`.** Asset URLs in HTML emit as `./assets/index-X.js`, so they resolve against whatever document URL the browser is on — `/` for standalone, `/plugins/signalk-doctor/console/` for embedded. Switching this to absolute would break the embedded case.
+- **`webapp/src/api.ts` is the only place that reads the meta tag.** Path strings inside `api.ts` are written without the prefix; the module concatenates the meta-derived base in front. Adding a network call anywhere else means routing it through `api.ts` (or one of its exports), or it will skip the prefix.
+
+Changing any of these is a cross-repo coordination with [signalk-doctor](https://github.com/dirkwa/signalk-doctor) — its proxy mount path and the meta tag content must match.
 
 ## Relationship to signalk-updater-server
 

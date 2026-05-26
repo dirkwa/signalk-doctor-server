@@ -1,9 +1,35 @@
 // API client for the SignalK Doctor console. Same-origin: the React
-// bundle is served by the Fastify host on port 3004, so every call
-// resolves against `/api`. The dev `vite` server proxies `/api` to a
-// real doctor-server (see vite.config.ts).
+// bundle is served by the Fastify host on port 3004 (standalone), and
+// also by the signalk-doctor plugin's reverse proxy under
+// /plugins/signalk-doctor/console/* (embedded). In both cases the
+// browser sees the bundle and the API on the same origin.
+//
+// API base discovery: when this webapp is loaded standalone, paths
+// resolve at /api/*. When proxied by signalk-doctor, the plugin
+// injects <meta name="api-base" content="/plugins/signalk-doctor/console">
+// into the HTML response; we read it once at module load and prefix
+// every API/EventSource URL. logsStreamUrl() goes through API_BASE too,
+// so EventSource consumers (useLogStream) pick the prefix up for free.
 
-const API_BASE = '/api';
+/**
+ * Read <meta name="api-base"> once. Empty / missing tag means the webapp
+ * is running standalone and paths should not be prefixed. Trailing slash
+ * is stripped so `${apiBase}/api/x` always produces exactly one slash
+ * between segments. Exported for tests.
+ */
+export function readApiBase(): string {
+  if (typeof document === 'undefined') return '';
+  const meta = document.querySelector('meta[name="api-base"]');
+  const raw = meta?.getAttribute('content') ?? '';
+  return raw.replace(/\/+$/, '');
+}
+
+const API_BASE = `${readApiBase()}/api`;
+
+/** Exposed for callers that build URLs by hand (e.g. download links). */
+export function getApiBase(): string {
+  return API_BASE;
+}
 
 export type ProbeStatus = 'ok' | 'warn' | 'fail' | 'unknown';
 
