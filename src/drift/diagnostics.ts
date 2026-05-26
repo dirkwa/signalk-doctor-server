@@ -21,9 +21,33 @@ export interface Diagnostics {
   packages: InstalledPackage[];
 }
 
+export type DiagnosticsReason =
+  /** Doctor has no admin token at /data/signalk-token. The installer
+   *  is supposed to provision it; see signalk-universal-installer's
+   *  step 15b. */
+  | 'no-token'
+  /** signalk-server returned 401/403 — token is bad or stale. The
+   *  token cache has been invalidated so the next scan re-reads from
+   *  disk; if that doesn't help, the operator must regenerate. */
+  | 'auth'
+  /** TCP-level failure (signalk-server down, DNS, AbortError on
+   *  timeout). Operator should check the Health tab's signalk-server
+   *  probe. */
+  | 'network'
+  /** signalk-server returned 404 — running an image that predates
+   *  SignalK PR #2702. Operator needs to upgrade signalk-server. */
+  | 'not-found'
+  /** Other non-2xx (5xx, etc.). Generic "something on the server is
+   *  broken" — surface stderr for the operator to dig in. */
+  | 'http'
+  /** Response wasn't an object or had no `packages` array. Most
+   *  likely the route was claimed by a different handler returning a
+   *  legacy shape, or the diagnostics PR's envelope changed. */
+  | 'bad-payload';
+
 export type DiagnosticsResult =
   | { ok: true; diagnostics: Diagnostics }
-  | { ok: false; reason: 'no-token' | 'auth' | 'network' | 'http' | 'bad-payload'; detail: string };
+  | { ok: false; reason: DiagnosticsReason; detail: string };
 
 export async function fetchDiagnostics(): Promise<DiagnosticsResult> {
   const token = await getSignalkAdminToken();
@@ -47,6 +71,13 @@ export async function fetchDiagnostics(): Promise<DiagnosticsResult> {
       // Token may have been rotated; drop the cache so the next scan picks up a fresh one.
       invalidateSignalkAdminTokenCache();
       return { ok: false, reason: 'auth', detail: `HTTP ${res.status} from ${url}` };
+    }
+    if (res.status === 404) {
+      // The /skServer/diagnostics endpoint landed in SignalK PR #2702;
+      // older signalk-server images don't have it. Distinguish from
+      // generic HTTP errors so the UI can guide the operator to
+      // upgrade signalk-server rather than chase a phantom 5xx.
+      return { ok: false, reason: 'not-found', detail: `HTTP 404 from ${url}` };
     }
     if (!res.ok) {
       return { ok: false, reason: 'http', detail: `HTTP ${res.status} from ${url}` };

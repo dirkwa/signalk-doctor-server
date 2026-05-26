@@ -18,6 +18,24 @@ export interface DriftPackage {
   lastFetchedAt: string | null;
 }
 
+/** Diagnostics-fetch failure reason persisted on the report so the
+ *  Drift UI can render reason-specific guidance instead of a generic
+ *  "offline" badge. Cleared on success. Mirrors DiagnosticsReason
+ *  from diagnostics.ts; kept as a separate string union here so the
+ *  webapp's type mirror doesn't import scanner internals. */
+export type DriftFetchReason =
+  | 'no-token'
+  | 'auth'
+  | 'network'
+  | 'not-found'
+  | 'http'
+  | 'bad-payload';
+
+export interface DriftFetchError {
+  reason: DriftFetchReason;
+  detail: string;
+}
+
 export interface DriftReport {
   /** The signalk-server image tag the report was computed against. */
   signalkImageTag: string | null;
@@ -27,5 +45,9 @@ export interface DriftReport {
   lastSuccessfulScanAt: string | null;
   /** True if the most recent scan reached the npm registry for at least one package. */
   online: boolean;
+  /** Why the last scan couldn't read installed packages from signalk-server,
+   *  if any. Null when the last scan was OK (even if packages array is
+   *  empty — that's "online, nothing to report"). */
+  lastFetchError: DriftFetchError | null;
   packages: DriftPackage[];
 }

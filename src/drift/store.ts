@@ -52,7 +52,13 @@ export async function loadDriftReport(): Promise<DriftReport | null> {
   try {
     const raw = await readFile(driftPath(), 'utf8');
     const parsed = JSON.parse(raw) as unknown;
-    return isDriftReport(parsed) ? parsed : null;
+    if (!isDriftReport(parsed)) return null;
+    // Migrate missing `lastFetchError` (added v0.7.5) to null so the
+    // wire shape stays uniform regardless of when the file was written.
+    if (!('lastFetchError' in parsed)) {
+      (parsed as DriftReport).lastFetchError = null;
+    }
+    return parsed;
   } catch {
     return null;
   }

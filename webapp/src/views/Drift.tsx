@@ -7,8 +7,107 @@ import {
   relTime,
   type ApiError,
   type DriftClassification,
+  type DriftFetchError,
   type DriftReport,
 } from '../api';
+
+/** Reason-specific guidance for the "Online: offline" failure modes.
+ *  Each entry: short label for the inline badge, a longer "what to do
+ *  about it" body for the alert under the header. Kept here so the
+ *  copy review can sit next to the component. */
+const FETCH_ERROR_GUIDANCE: Record<
+  DriftFetchError['reason'],
+  { label: string; color: string; title: string; body: React.ReactNode }
+> = {
+  'no-token': {
+    label: 'no admin token',
+    color: 'warning',
+    title: 'No signalk-server admin token at /data/signalk-token',
+    body: (
+      <>
+        The doctor's drift scanner needs an admin token to call signalk-server's{' '}
+        <code>/skServer/diagnostics</code> endpoint. The bash installer's step{' '}
+        <code>15b. Doctor admin token</code> writes this file. Re-run the universal installer (or
+        run <code>signalk update</code> on the host) to provision it; if signalk-server's security
+        isn't enabled yet, enable it in the admin UI first.
+      </>
+    ),
+  },
+  auth: {
+    label: '401/403',
+    color: 'danger',
+    title: 'signalk-server rejected the admin token',
+    body: (
+      <>
+        The token at <code>~/.signalk-doctor/signalk-token</code> is invalid or expired. Regenerate
+        it on the host:
+        <pre className="bg-body-tertiary p-2 rounded small mt-2 mb-0">
+          podman exec signalk-server \\
+          <br />
+          /home/node/signalk/node_modules/signalk-server/bin/signalk-generate-token \\
+          <br />
+          -u admin -e 5y -s /home/node/.signalk/security.json \\
+          <br />
+          {'>'} ~/.signalk-doctor/signalk-token
+        </pre>
+      </>
+    ),
+  },
+  network: {
+    label: 'unreachable',
+    color: 'danger',
+    title: 'signalk-server is unreachable',
+    body: (
+      <>
+        The doctor couldn't open a TCP connection to signalk-server at all. Check the{' '}
+        <strong>Health</strong> tab's <em>signalk-server</em> probe — if it's red, restart the
+        container from the Updater Console or via{' '}
+        <code>systemctl --user restart signalk-server.service</code>.
+      </>
+    ),
+  },
+  'not-found': {
+    label: '404',
+    color: 'warning',
+    title: 'signalk-server doesn’t have /skServer/diagnostics',
+    body: (
+      <>
+        The diagnostics endpoint landed upstream in{' '}
+        <a
+          href="https://github.com/SignalK/signalk-server/pull/2702"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          SignalK PR #2702
+        </a>
+        . The currently-running signalk-server image predates that. Switch to a newer image via the
+        Updater Console's <strong>Versions</strong> tab (the <code>:dirkwa</code> channel already
+        has it).
+      </>
+    ),
+  },
+  http: {
+    label: 'HTTP error',
+    color: 'danger',
+    title: 'signalk-server returned a non-OK status',
+    body: (
+      <>Generic HTTP failure — see the detail line below for the exact code, and the Logs tab.</>
+    ),
+  },
+  'bad-payload': {
+    label: 'malformed',
+    color: 'warning',
+    title: 'signalk-server returned an unexpected response shape',
+    body: (
+      <>
+        The diagnostics endpoint replied with something other than the expected{' '}
+        <code>{'{ packages: [...] }'}</code> envelope. The Drift feature targets the upstream PR
+        #2702 contract; a custom signalk-server fork that overrides this route would need to match
+        it.
+      </>
+    ),
+  },
+};
 
 // Per-classification badge color. Drift severity climbs left-to-right:
 // patch/minor/major/prerelease are the "drift" cases — unknown means
@@ -142,13 +241,34 @@ export function Drift() {
             </dd>
             <dt className="col-sm-3">Online</dt>
             <dd className="col-sm-9">
-              <Badge color={report.online ? 'success' : 'secondary'} pill>
-                {report.online ? 'yes' : 'offline'}
-              </Badge>
+              {report.lastFetchError !== null ? (
+                <Badge
+                  color={FETCH_ERROR_GUIDANCE[report.lastFetchError.reason].color}
+                  pill
+                  title={report.lastFetchError.detail}
+                >
+                  {FETCH_ERROR_GUIDANCE[report.lastFetchError.reason].label}
+                </Badge>
+              ) : (
+                <Badge color={report.online ? 'success' : 'secondary'} pill>
+                  {report.online ? 'yes' : 'offline'}
+                </Badge>
+              )}
             </dd>
           </dl>
         </CardBody>
       </Card>
+
+      {report.lastFetchError !== null && (
+        <Alert color={FETCH_ERROR_GUIDANCE[report.lastFetchError.reason].color} className="mb-3">
+          <h6 className="alert-heading mb-2">
+            {FETCH_ERROR_GUIDANCE[report.lastFetchError.reason].title}
+          </h6>
+          <div className="mb-2">{FETCH_ERROR_GUIDANCE[report.lastFetchError.reason].body}</div>
+          <hr />
+          <p className="mb-0 small text-muted font-monospace">{report.lastFetchError.detail}</p>
+        </Alert>
+      )}
 
       {refreshErr !== null && (
         <Alert color="danger" className="mb-3">
@@ -168,9 +288,9 @@ export function Drift() {
         <CardBody className="p-0">
           {report.packages.length === 0 ? (
             <p className="text-muted small p-3 mb-0">
-              No tracked packages reported. signalk-server may be unreachable, or its{' '}
-              <code>/skServer/diagnostics</code> endpoint may not be available — check the Health
-              tab for the <em>signalk-server</em> probe.
+              {report.lastFetchError !== null
+                ? 'No package data yet — see the diagnostic alert above for the next step.'
+                : 'No tracked packages reported. The scan completed without an error, but signalk-server returned an empty packages array.'}
             </p>
           ) : (
             <Table responsive size="sm" className="mb-0">
