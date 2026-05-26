@@ -315,6 +315,50 @@ export function saveBlob(filename: string, blob: Blob): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Upload a bug-report tarball to filebin.net and return the
+ *  publicly-accessible URL.
+ *
+ *  filebin.net is unauthenticated public storage with wide-open CORS
+ *  (Access-Control-Allow-Origin: *), so the browser can POST directly
+ *  — no server-side relay needed. Bin names mix timestamp + Math.random
+ *  so guessing the URL is infeasible, which is the only access control
+ *  filebin offers. Bins auto-expire after ~6 days.
+ *
+ *  Mirrors the bash `signalk bug-report` upload flow so the two
+ *  surfaces produce the same kind of bin URL. The bash flow uses
+ *  $RANDOM (POSIX); browser uses Math.random; functionally equivalent
+ *  for "unguessable suffix". */
+export async function uploadToFilebin(filename: string, blob: Blob): Promise<string> {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
+  const rand = Math.floor(Math.random() * 1_000_000).toString();
+  const bin = `signalk-${stamp}-${rand}`;
+  const url = `https://filebin.net/${bin}/${encodeURIComponent(filename)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/gzip' },
+    body: blob,
+  });
+  if (!res.ok) {
+    throw new Error(`filebin upload failed: HTTP ${res.status}`);
+  }
+  return url;
+}
+
+/** Build a github.com/.../issues/new URL with title + body pre-filled.
+ *  The body should be plain markdown — GitHub renders it inside the
+ *  textarea on the issue page.
+ *
+ *  Returned URL is meant for `window.open(url, '_blank')` so it lands
+ *  in a new tab; the calling page stays put. */
+export function buildGithubIssueUrl(opts: {
+  repo: string; // e.g. "SignalK/signalk-server"
+  title: string;
+  body: string;
+}): string {
+  const params = new URLSearchParams({ title: opts.title, body: opts.body });
+  return `https://github.com/${opts.repo}/issues/new?${params.toString()}`;
+}
+
 // ── Formatting helpers ──────────────────────────────────────
 
 export function fmtTime(iso: string | null | undefined): string {
