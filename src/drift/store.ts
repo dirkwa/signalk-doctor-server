@@ -1,6 +1,6 @@
 import { open, mkdir, readFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { DriftReport } from './types.js';
+import type { DriftFetchError, DriftFetchReason, DriftReport } from './types.js';
 
 // Resolved at request time so tests can override DOCTOR_DATA between scans
 // (and so an installer can adjust the mount path without rebuilding).
@@ -33,14 +33,40 @@ async function writeAtomic(filePath: string, body: string): Promise<void> {
   await fsyncDir(dirname(filePath));
 }
 
+const DRIFT_FETCH_REASONS: ReadonlySet<DriftFetchReason> = new Set([
+  'no-token',
+  'auth',
+  'network',
+  'not-found',
+  'http',
+  'bad-payload',
+]);
+
+function isDriftFetchReason(value: unknown): value is DriftFetchReason {
+  return typeof value === 'string' && DRIFT_FETCH_REASONS.has(value as DriftFetchReason);
+}
+
+function isDriftFetchError(value: unknown): value is DriftFetchError | null {
+  if (value === null) return true;
+  if (!value || typeof value !== 'object') return false;
+  const v = value as { reason?: unknown; detail?: unknown };
+  return isDriftFetchReason(v.reason) && typeof v.detail === 'string';
+}
+
 function isDriftReport(value: unknown): value is DriftReport {
   if (!value || typeof value !== 'object') return false;
-  const v = value as Partial<DriftReport>;
+  const v = value as Partial<DriftReport> & { lastFetchError?: unknown };
   return (
     (typeof v.signalkImageTag === 'string' || v.signalkImageTag === null) &&
     typeof v.lastScannedAt === 'string' &&
     (typeof v.lastSuccessfulScanAt === 'string' || v.lastSuccessfulScanAt === null) &&
     typeof v.online === 'boolean' &&
+    // lastFetchError is allowed to be absent (pre-v0.7.5 reports) — the
+    // migration in loadDriftReport will default it to null. When present
+    // it must be either null or a well-formed { reason, detail } object;
+    // a malformed value would crash UI lookups like
+    // FETCH_ERROR_GUIDANCE[reason], so refuse to load instead.
+    (!('lastFetchError' in v) || isDriftFetchError(v.lastFetchError)) &&
     Array.isArray(v.packages)
   );
 }
@@ -52,7 +78,13 @@ export async function loadDriftReport(): Promise<DriftReport | null> {
   try {
     const raw = await readFile(driftPath(), 'utf8');
     const parsed = JSON.parse(raw) as unknown;
-    return isDriftReport(parsed) ? parsed : null;
+    if (!isDriftReport(parsed)) return null;
+    // Migrate missing `lastFetchError` (added v0.7.5) to null so the
+    // wire shape stays uniform regardless of when the file was written.
+    if (!('lastFetchError' in parsed)) {
+      (parsed as DriftReport).lastFetchError = null;
+    }
+    return parsed;
   } catch {
     return null;
   }

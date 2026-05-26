@@ -234,11 +234,27 @@ export interface DriftPackage {
   lastFetchedAt: string | null;
 }
 
+export type DriftFetchReason =
+  | 'no-token'
+  | 'auth'
+  | 'network'
+  | 'not-found'
+  | 'http'
+  | 'bad-payload';
+
+export interface DriftFetchError {
+  reason: DriftFetchReason;
+  detail: string;
+}
+
 export interface DriftReport {
   signalkImageTag: string | null;
   lastScannedAt: string;
   lastSuccessfulScanAt: string | null;
   online: boolean;
+  /** Why the most recent scan couldn't read installed packages from
+   *  signalk-server, if any. Null when the last scan was OK. */
+  lastFetchError: DriftFetchError | null;
   packages: DriftPackage[];
 }
 

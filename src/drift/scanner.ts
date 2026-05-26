@@ -104,6 +104,7 @@ export async function runDriftScan(): Promise<ScanOutcome> {
       lastScannedAt: nowIso,
       lastSuccessfulScanAt: baseReport?.lastSuccessfulScanAt ?? null,
       online: false,
+      lastFetchError: { reason: diagnosticsRes.reason, detail: diagnosticsRes.detail },
       // Keep prior packages array intact when we can't read fresh data.
       packages: baseReport?.packages ?? [],
     };
@@ -132,6 +133,7 @@ export async function runDriftScan(): Promise<ScanOutcome> {
     lastScannedAt: nowIso,
     lastSuccessfulScanAt: anyOnline ? nowIso : (baseReport?.lastSuccessfulScanAt ?? null),
     online: anyOnline,
+    lastFetchError: null,
     packages,
   };
   await saveDriftReport(report);

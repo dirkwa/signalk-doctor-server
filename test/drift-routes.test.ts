@@ -12,6 +12,7 @@ const FIXTURE: DriftReport = {
   lastScannedAt: '2026-05-24T00:00:00.000Z',
   lastSuccessfulScanAt: '2026-05-24T00:00:00.000Z',
   online: true,
+  lastFetchError: null,
   packages: [
     {
       name: '@canboat/canboatjs',

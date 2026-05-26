@@ -10,6 +10,7 @@ function emptyReport(): DriftReport {
     lastScannedAt: new Date(0).toISOString(),
     lastSuccessfulScanAt: null,
     online: false,
+    lastFetchError: null,
     packages: [],
   };
 }
