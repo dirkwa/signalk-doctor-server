@@ -89,8 +89,10 @@ async function resolveHostPath(containerPath: string): Promise<string | null> {
     const prefix = c.mountPoint.endsWith('/') ? c.mountPoint : c.mountPoint + '/';
     if (containerPath.startsWith(prefix)) {
       const remainder = containerPath.slice(c.mountPoint.length);
-      const base = c.hostRoot.endsWith('/') ? c.hostRoot.slice(0, -1) : c.hostRoot;
-      return base + remainder;
+      // Use path.join so the join is correct when mountPoint is `/`
+      // (root): hand-rolled `base + remainder` would have stripped the
+      // leading slash from the result, producing a relative path.
+      return join(c.hostRoot, remainder);
     }
   }
   return null;
