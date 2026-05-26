@@ -37,6 +37,16 @@ function bugReportTimeoutMs(): number {
 // killed before it could prune.
 const RETENTION = 5;
 
+/** POSIX-shell quote a string by wrapping in single quotes and
+ *  escaping internal single quotes. Used to embed host paths in the
+ *  `sh -c` command we hand to systemd-run; defensive against weird
+ *  characters in $HOME (apostrophes, spaces). Not for use against
+ *  untrusted input — the strings we quote here come from
+ *  /proc/self/mountinfo, which is kernel-controlled. */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
 /** Read `/proc/self/mountinfo` and return the host-side absolute path
  *  that backs `containerPath`. Used to translate container-internal
  *  paths (`/host-bin/signalk`, `/data/bug-reports`) into host paths
@@ -208,6 +218,19 @@ export async function generateBugReport(log?: SpawnLogger): Promise<BugReportRes
   // transient unit after it exits even if we're slow to read its state.
   // --service-type=oneshot is the correct unit type for a "run to
   // completion" command.
+  //
+  // Wrap the host exec in `/bin/sh -c` to defer binary lookup to the
+  // host's filesystem at unit-start time. systemd-run pre-checks the
+  // executable's existence in its OWN process's filesystem view before
+  // dispatching the unit over DBus — and from inside the doctor
+  // container, the host path /home/<user>/.local/bin/signalk does NOT
+  // exist (only /host-bin/signalk does). Pre-flight fails with "Failed
+  // to find executable …: No such file or directory" before the unit
+  // ever reaches the host. `/bin/sh` lives at the same path on both
+  // sides, so the pre-check passes, and the inner host path is
+  // resolved by the spawned shell on the host. Same fix systemd-run's
+  // own docs recommend for "exec is on a different mount namespace".
+  const shellCommand = `${shellQuote(hostHostScript)} bug-report --to ${shellQuote(hostOutDir)}`;
   const args = [
     '--user',
     '--pipe',
@@ -216,10 +239,9 @@ export async function generateBugReport(log?: SpawnLogger): Promise<BugReportRes
     '--service-type=oneshot',
     '--quiet',
     '--',
-    hostHostScript,
-    'bug-report',
-    '--to',
-    hostOutDir,
+    '/bin/sh',
+    '-c',
+    shellCommand,
   ];
 
   // DBUS_SESSION_BUS_ADDRESS is set by the Quadlet (Environment=...).
