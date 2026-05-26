@@ -37,6 +37,30 @@ function bugReportTimeoutMs(): number {
 // killed before it could prune.
 const RETENTION = 5;
 
+/** POSIX-shell quote a string by wrapping in single quotes and
+ *  escaping internal single quotes. Used to embed host paths in the
+ *  `sh -c` command we hand to systemd-run; defensive against weird
+ *  characters in $HOME (apostrophes, spaces). Not for use against
+ *  untrusted input — the strings we quote here come from
+ *  /proc/self/mountinfo, which is kernel-controlled. */
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/** Decode the octal escapes mountinfo uses for special chars in path
+ *  fields. Per `man proc_pid_mountinfo`, the kernel encodes space
+ *  (`\040`), tab (`\011`), newline (`\012`), and backslash (`\134`)
+ *  this way in fields 4 (root) and 5 (mount point). If we don't undo
+ *  them, an operator whose home is `/home/Dirk Smith/` would see
+ *  `/home/Dirk\040Smith/.local/bin/signalk` come back from
+ *  resolveHostPath, then shellQuote would wrap that literal backslash-
+ *  octal sequence and `sh -c` would fail to find the file. */
+function unescapeMountinfoField(s: string): string {
+  return s.replace(/\\([0-7]{3})/g, (_m, oct: string) =>
+    String.fromCharCode(Number.parseInt(oct, 8)),
+  );
+}
+
 /** Read `/proc/self/mountinfo` and return the host-side absolute path
  *  that backs `containerPath`. Used to translate container-internal
  *  paths (`/host-bin/signalk`, `/data/bug-reports`) into host paths
@@ -76,10 +100,13 @@ async function resolveHostPath(containerPath: string): Promise<string | null> {
   for (const line of lines) {
     const parts = line.split(' ');
     if (parts.length < 5) continue;
-    const hostRoot = parts[3];
-    const mountPoint = parts[4];
-    if (hostRoot === undefined || mountPoint === undefined) continue;
-    candidates.push({ hostRoot, mountPoint });
+    const hostRootRaw = parts[3];
+    const mountPointRaw = parts[4];
+    if (hostRootRaw === undefined || mountPointRaw === undefined) continue;
+    candidates.push({
+      hostRoot: unescapeMountinfoField(hostRootRaw),
+      mountPoint: unescapeMountinfoField(mountPointRaw),
+    });
   }
   candidates.sort((a, b) => b.mountPoint.length - a.mountPoint.length);
   for (const c of candidates) {
@@ -208,6 +235,19 @@ export async function generateBugReport(log?: SpawnLogger): Promise<BugReportRes
   // transient unit after it exits even if we're slow to read its state.
   // --service-type=oneshot is the correct unit type for a "run to
   // completion" command.
+  //
+  // Wrap the host exec in `/bin/sh -c` to defer binary lookup to the
+  // host's filesystem at unit-start time. systemd-run pre-checks the
+  // executable's existence in its OWN process's filesystem view before
+  // dispatching the unit over DBus — and from inside the doctor
+  // container, the host path /home/<user>/.local/bin/signalk does NOT
+  // exist (only /host-bin/signalk does). Pre-flight fails with "Failed
+  // to find executable …: No such file or directory" before the unit
+  // ever reaches the host. `/bin/sh` lives at the same path on both
+  // sides, so the pre-check passes, and the inner host path is
+  // resolved by the spawned shell on the host. Same fix systemd-run's
+  // own docs recommend for "exec is on a different mount namespace".
+  const shellCommand = `${shellQuote(hostHostScript)} bug-report --to ${shellQuote(hostOutDir)}`;
   const args = [
     '--user',
     '--pipe',
@@ -216,10 +256,9 @@ export async function generateBugReport(log?: SpawnLogger): Promise<BugReportRes
     '--service-type=oneshot',
     '--quiet',
     '--',
-    hostHostScript,
-    'bug-report',
-    '--to',
-    hostOutDir,
+    '/bin/sh',
+    '-c',
+    shellCommand,
   ];
 
   // DBUS_SESSION_BUS_ADDRESS is set by the Quadlet (Environment=...).

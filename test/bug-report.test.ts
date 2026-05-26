@@ -302,4 +302,72 @@ describe('generateBugReport', () => {
       else process.env.BUG_REPORT_TIMEOUT_MS = prev;
     }
   });
+
+  it('decodes mountinfo octal escapes (e.g. \\040 = space)', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(sb.hostBinDir, { recursive: true });
+    await writeExecutable(join(sb.hostBinDir, 'signalk'), '#!/usr/bin/env bash\necho host\n');
+
+    // Replace the identity mountinfo with one that uses `\040` for a
+    // space in BOTH the host root and the mount point — verifies the
+    // unescape helper runs on both fields before shellQuote ever sees
+    // them. Use sb.hostBinDir as a substring so we still resolve to a
+    // real directory (mkdir'd above); the escape sits in a sibling
+    // path that maps onto our real dir for test purposes.
+    const containerPath = sb.hostBinDir.replace(/ /g, ' ') + ' with space';
+    const hostPath = sb.hostBinDir.replace(/ /g, ' ') + ' with space';
+    // Encode spaces as \040 the way the kernel does in mountinfo.
+    const encode = (s: string): string => s.replace(/ /g, '\\040');
+    const encodedHost = encode(hostPath);
+    const encodedContainer = encode(containerPath);
+    await writeFile(
+      sb.mountinfoPath,
+      `1 0 8:1 ${encodedHost} ${encodedContainer} rw - tmpfs tmpfs rw\n` +
+        // Keep the bug-report-dir identity mapping (no escapes needed).
+        `2 0 8:1 ${sb.bugReportDir} ${sb.bugReportDir} rw - tmpfs tmpfs rw\n`,
+    );
+    // Override HOST_BIN_DIR so pre-flight checks the real (space-bearing)
+    // path. We can't actually exec a host script under that fake path,
+    // so put a tarball directly in bug-reports as the fake systemd-run.
+    // The point of this test is the host-path resolution, not the
+    // full systemd-run cycle.
+    const realHostBinWithSpace = join(sb.hostBinDir, ' with space');
+    await mkdir(realHostBinWithSpace, { recursive: true });
+    await writeExecutable(
+      join(realHostBinWithSpace, 'signalk'),
+      '#!/usr/bin/env bash\necho host\n',
+    );
+    // Adjust mountinfo to point at the real space-bearing dir.
+    await writeFile(
+      sb.mountinfoPath,
+      `1 0 8:1 ${encode(realHostBinWithSpace)} ${encode(realHostBinWithSpace)} rw - tmpfs tmpfs rw\n` +
+        `2 0 8:1 ${sb.bugReportDir} ${sb.bugReportDir} rw - tmpfs tmpfs rw\n`,
+    );
+    process.env.HOST_BIN_DIR = realHostBinWithSpace;
+
+    // Fake systemd-run: writes a tarball + exits 0. If the unescape
+    // didn't run, the engine would have built a path containing the
+    // literal `\040` sequence and the fake's args would still be
+    // garbage (irrelevant to the fake — it doesn't parse args). The
+    // assertion that ACTUALLY proves the unescape worked is that the
+    // engine doesn't return `host-script-missing` from its pre-flight
+    // stat — that check resolves the same containerPath we just built
+    // an unescaped mountinfo entry for.
+    await writeExecutable(
+      join(sb.pathDir, 'systemd-run'),
+      fakeSystemdRun({
+        exitCode: 0,
+        tarballName: 'signalk-bug-report-20260526T050000Z.tar.gz',
+        bugReportDir: sb.bugReportDir,
+      }),
+    );
+    const r = await generateBugReport();
+    // With the unescape: host-bin pre-flight passes, host-script
+    // pre-flight passes (we wrote a real signalk binary there),
+    // mountinfo resolution succeeds, systemd-run runs the fake, fake
+    // writes tarball, engine streams it back.
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.filename).toBe('signalk-bug-report-20260526T050000Z.tar.gz');
+  });
 });
