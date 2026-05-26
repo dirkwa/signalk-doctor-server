@@ -6,13 +6,15 @@ export type LogStatus = 'connecting' | 'connected' | 'paused' | 'error' | 'disco
 export interface ParsedLogLine {
   /** Sequential id used as a stable React key. */
   id: number;
-  /** ISO timestamp if we could extract one from the line, else null. */
+  /** ISO timestamp; either extracted from the line, or stamped at SSE arrival when the source line has no embedded time. */
   time: string | null;
+  /** True when `time` was filled from the SSE arrival moment rather than the log line itself. */
+  timeApproximated: boolean;
   /** Lower-case level like info/warn/error/debug/trace/fatal, or '' when unknown. */
   level: string;
-  /** Cleaned-up message text (Pino fields collapsed, ISO prefix stripped, …). */
+  /** Cleaned-up message text (Pino fields collapsed, ISO prefix stripped, ANSI escapes removed). */
   message: string;
-  /** Original raw line as the server sent it. */
+  /** Original raw line as the server sent it (ANSI codes intact). */
   raw: string;
 }
 
@@ -45,11 +47,28 @@ const TS_RX_FRONT = /^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)\s*/;
 const TS_RX_PINO = /"time":(\d{10,13})/;
 const MAX_BUFFER = 2000;
 
+// ANSI CSI escape sequences emitted by terminal-coloured loggers
+// (signalk-server's morgan access logs wrap status codes in green).
+// Stripped before rendering — the UI applies its own level-based
+// colours via levelTextClass(); the raw control bytes render as
+// garbled glyphs otherwise. ESC (0x1b, written as \x1b in the regex
+// source so the file carries no literal control byte) introduces
+// every CSI sequence.
+const ANSI_CSI_RX = /\x1b\[[0-9;?]*[A-Za-z]/g;
+
+function stripAnsi(value: string): string {
+  return value.replace(ANSI_CSI_RX, '');
+}
+
 export function parseLogLine(raw: string, id: number): ParsedLogLine {
-  if (!raw) return { id, time: null, level: '', message: '', raw };
-  if (raw.startsWith('{')) {
+  if (!raw) return { id, time: null, timeApproximated: false, level: '', message: '', raw };
+  // Strip ANSI escapes for parsing and rendering; the original `raw` field
+  // keeps the bytes intact for callers that want them (copy-to-clipboard,
+  // debug logging).
+  const cleaned = stripAnsi(raw);
+  if (cleaned.startsWith('{')) {
     try {
-      const obj = JSON.parse(raw) as Record<string, unknown>;
+      const obj = JSON.parse(cleaned) as Record<string, unknown>;
       const lvlNum = obj.level;
       let level = '';
       if (typeof lvlNum === 'number' && PINO_LEVELS[lvlNum]) {
@@ -66,12 +85,19 @@ export function parseLogLine(raw: string, id: number): ParsedLogLine {
         .filter(([k]) => !['level', 'time', 'msg', 'message', 'hostname', 'pid', 'v'].includes(k))
         .map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`)
         .join(' ');
-      return { id, time, level, message: extras ? `${msg} ${extras}` : msg, raw };
+      return {
+        id,
+        time,
+        timeApproximated: false,
+        level,
+        message: extras ? `${msg} ${extras}` : msg,
+        raw,
+      };
     } catch {
       // not JSON — fall through to plain-text parsing
     }
   }
-  let line = raw;
+  let line = cleaned;
   let time: string | null = null;
   const tsMatch = line.match(TS_RX_FRONT);
   if (tsMatch && tsMatch[1] !== undefined) {
@@ -95,7 +121,7 @@ export function parseLogLine(raw: string, id: number): ParsedLogLine {
       level = PINO_LEVELS[lvlNum] ?? '';
     }
   }
-  return { id, time, level, message: line, raw };
+  return { id, time, timeApproximated: false, level, message: line, raw };
 }
 
 export function useLogStream(opts: UseLogStreamOptions): UseLogStreamReturn {
@@ -158,9 +184,16 @@ export function useLogStream(opts: UseLogStreamOptions): UseLogStreamReturn {
       if (pausedRef.current) return;
       idCounter.current += 1;
       const parsed = parseLogLine(ev.data, idCounter.current);
+      // Fall back to SSE arrival moment when the line has no embedded
+      // timestamp (signalk-server's morgan logger emits none). Marked
+      // so the renderer can flag it as approximate.
+      const withTime: ParsedLogLine =
+        parsed.time === null
+          ? { ...parsed, time: new Date().toISOString(), timeApproximated: true }
+          : parsed;
       setLines((prev) => {
         const next = prev.length >= MAX_BUFFER ? prev.slice(prev.length - MAX_BUFFER + 1) : prev;
-        return [...next, parsed];
+        return [...next, withTime];
       });
     };
     const onEnd = (ev: MessageEvent<string>): void => {
@@ -170,6 +203,7 @@ export function useLogStream(opts: UseLogStreamOptions): UseLogStreamReturn {
         {
           id: idCounter.current,
           time: null,
+          timeApproximated: false,
           level: '',
           message: `[stream ended: ${ev.data || 'closed'}]`,
           raw: '',
