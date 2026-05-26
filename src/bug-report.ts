@@ -74,7 +74,16 @@ interface SpawnLogger {
  *  The doctor delegates via systemd-run so the script runs in the
  *  host user's session (with the right $HOME, $XDG_RUNTIME_DIR, podman
  *  socket, etc.). Calling /host-bin/signalk directly from inside the
- *  doctor container would pick up the container's environment instead. */
+ *  doctor container would pick up the container's environment instead.
+ *
+ *  NOT gated on the CC-5 operation lock. The host `signalk bug-report`
+ *  is read-mostly — it lists systemd units, inspects containers, dumps
+ *  journals, redacts and copies settings.json. No Quadlet rewrites, no
+ *  unit start/stop, no image pulls. Its only writes are under the
+ *  per-invocation tarball-output directory, which the doctor owns and
+ *  every operator-facing call would target. Holding the lock would
+ *  also defeat the most important use case: running bug-report
+ *  precisely BECAUSE the updater is wedged and the lock is stuck. */
 export async function generateBugReport(log?: SpawnLogger): Promise<BugReportResult> {
   const start = Date.now();
   const hb = hostBinDir();
@@ -186,9 +195,16 @@ export async function generateBugReport(log?: SpawnLogger): Promise<BugReportRes
 
   // The script printed [OK] but check for the actual file. Pick the
   // newest tarball that wasn't there before the run — robust against
-  // clock skew between the host and the container.
+  // clock skew between the host and the container. `after` is sorted
+  // lexicographically and our ISO-Z timestamps are ordered the same
+  // way chronologically, so the last element among the new entries is
+  // the newest. If a prior run was killed mid-write (no error path
+  // back, only the doctor-side run knows the new file wasn't ours),
+  // `find()` would have returned the stale orphan instead of our
+  // freshly-produced tarball.
   const after = await listTarballs(outDir);
-  const fresh = after.find((f) => !beforeSet.has(f));
+  const freshCandidates = after.filter((f) => !beforeSet.has(f));
+  const fresh = freshCandidates.at(-1);
   if (!fresh) {
     return {
       ok: false,
