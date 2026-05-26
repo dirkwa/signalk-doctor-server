@@ -223,4 +223,45 @@ describe('generateBugReport', () => {
       'signalk-bug-report-20260526T020000Z.tar.gz',
     ]);
   });
+
+  it('reports spawn-failed when systemd-run is not on PATH', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(sb.hostBinDir, { recursive: true });
+    await writeExecutable(join(sb.hostBinDir, 'signalk'), '#!/usr/bin/env bash\necho host\n');
+    // Truncate PATH to ONLY the empty sandbox dir — otherwise /usr/bin's
+    // real systemd-run would be picked up and the test would never
+    // exercise the ENOENT path. activateSandbox appended the original
+    // PATH; restore it after via the existing teardown().
+    process.env.PATH = sb.pathDir;
+    const r = await generateBugReport();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('spawn-failed');
+    expect(r.detail).toMatch(/ENOENT|not found|systemd-run/i);
+  });
+
+  it('reports timeout when systemd-run does not finish in BUG_REPORT_TIMEOUT_MS', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(sb.hostBinDir, { recursive: true });
+    await writeExecutable(join(sb.hostBinDir, 'signalk'), '#!/usr/bin/env bash\necho host\n');
+    // Fake systemd-run that sleeps longer than the test timeout. The
+    // 200ms ceiling we set via env makes the test fast; in production
+    // the default is 10 minutes.
+    await writeExecutable(
+      join(sb.pathDir, 'systemd-run'),
+      '#!/usr/bin/env bash\nsleep 5\nexit 0\n',
+    );
+    const prev = process.env.BUG_REPORT_TIMEOUT_MS;
+    process.env.BUG_REPORT_TIMEOUT_MS = '200';
+    try {
+      const r = await generateBugReport();
+      expect(r.ok).toBe(false);
+      if (r.ok) return;
+      expect(r.reason).toBe('timeout');
+      expect(r.detail).toMatch(/did not finish within 200ms/);
+    } finally {
+      if (prev === undefined) delete process.env.BUG_REPORT_TIMEOUT_MS;
+      else process.env.BUG_REPORT_TIMEOUT_MS = prev;
+    }
+  });
 });

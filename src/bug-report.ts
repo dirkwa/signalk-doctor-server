@@ -22,8 +22,14 @@ function bugReportDir(): string {
 // How long systemd-run is allowed to take. The bash bug-report walks
 // 24h of journal output, inspects every signalk-* container, and tars
 // the lot — slow on a busy boat. 10 minutes is the upper bound before
-// we kill the unit and surface a timeout.
-const BUG_REPORT_TIMEOUT_MS = 10 * 60 * 1000;
+// we kill the unit and surface a timeout. Env-override exists so tests
+// can shrink it to milliseconds without sleeping the test runner.
+function bugReportTimeoutMs(): number {
+  const raw = process.env.BUG_REPORT_TIMEOUT_MS;
+  if (raw === undefined) return 10 * 60 * 1000;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : 10 * 60 * 1000;
+}
 
 // Keep this many tarballs around for offline retrieval (`ssh` then `ls
 // ~/.signalk-doctor/bug-reports/`). Older ones are pruned at the start
@@ -133,12 +139,13 @@ export async function generateBugReport(log?: SpawnLogger): Promise<BugReportRes
   // DBUS_SESSION_BUS_ADDRESS is set by the Quadlet (Environment=...).
   // systemd-run picks the bus to talk to from there. No extra env
   // plumbing required on the spawn() call.
-  const stderr = await runSystemdRun(args, BUG_REPORT_TIMEOUT_MS, log);
+  const timeoutMs = bugReportTimeoutMs();
+  const stderr = await runSystemdRun(args, timeoutMs, log);
   if (stderr.code === 'timeout') {
     return {
       ok: false,
       reason: 'timeout',
-      detail: `bug-report did not finish within ${BUG_REPORT_TIMEOUT_MS}ms`,
+      detail: `bug-report did not finish within ${timeoutMs}ms`,
       stderr: stderr.stderr,
       durationMs: Date.now() - start,
     };
