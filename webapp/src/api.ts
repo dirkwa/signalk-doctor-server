@@ -216,6 +216,71 @@ export function refreshInstaller(): Promise<InstallerRefreshResponse> {
   return request<InstallerRefreshResponse>('/installer/refresh', { method: 'POST' });
 }
 
+// ── Bug report ──────────────────────────────────────────────
+
+export interface BugReportSuccess {
+  filename: string;
+  sizeBytes: number;
+  durationMs: number;
+  blob: Blob;
+}
+
+/** POST /api/bug-report and return the tarball as a Blob plus metadata
+ *  read from response headers. The doctor sets x-bug-report-filename
+ *  and x-bug-report-duration-ms so the webapp can show "took 47s, 3.2 MB"
+ *  without parsing the binary body. */
+export async function downloadBugReport(): Promise<BugReportSuccess> {
+  // Don't reuse request<T> — it text()-parses the body and would
+  // corrupt a binary tarball. Mirror its auth+header logic instead.
+  const init: RequestInit = { method: 'POST', headers: buildHeaders({ method: 'POST' }) };
+  const res = await fetch(`${API_BASE}/bug-report`, init);
+  if (!res.ok) {
+    // Error responses come back as JSON: { error, reason, ... }.
+    // Read as text first so we can fall back gracefully on parse
+    // failure — calling res.json() then res.text() doesn't work
+    // because the body stream is consumed on the first read. Same
+    // pattern as request<T> above.
+    const text = await res.text();
+    let body: unknown = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
+    }
+    const msg =
+      body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
+        ? body.error
+        : `HTTP ${res.status}`;
+    const err: ApiError = new Error(msg);
+    err.status = res.status;
+    err.body = body;
+    throw err;
+  }
+  const blob = await res.blob();
+  const filename = res.headers.get('x-bug-report-filename') ?? 'signalk-bug-report.tar.gz';
+  const durationMs = Number.parseInt(res.headers.get('x-bug-report-duration-ms') ?? '0', 10) || 0;
+  return { filename, sizeBytes: blob.size, durationMs, blob };
+}
+
+/** Save a downloaded Blob to the user's Downloads folder by clicking
+ *  a synthetic anchor with `download` set. Works in all current
+ *  browsers without external deps. */
+export function saveBlob(filename: string, blob: Blob): void {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // The browser keeps the object URL alive while the download is in
+  // flight, so it's safe to revoke now — but revoking too early on
+  // Safari has caused issues, so wait a tick.
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // ── Formatting helpers ──────────────────────────────────────
 
 export function fmtTime(iso: string | null | undefined): string {

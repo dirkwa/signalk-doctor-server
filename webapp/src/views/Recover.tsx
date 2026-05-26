@@ -1,6 +1,13 @@
 import { useState } from 'react';
-import { Alert, Button, Card, CardBody, CardHeader } from 'reactstrap';
-import { recoverAll, recoverUpdater, type ApiError } from '../api';
+import { Alert, Button, Card, CardBody, CardHeader, Spinner } from 'reactstrap';
+import {
+  downloadBugReport,
+  fmtSize,
+  recoverAll,
+  recoverUpdater,
+  saveBlob,
+  type ApiError,
+} from '../api';
 import { ConfirmModal } from '../components/ConfirmModal';
 
 type Target = 'all' | 'updater';
@@ -30,6 +37,47 @@ export function Recover() {
   const [busy, setBusy] = useState<Target | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [resultKind, setResultKind] = useState<'ok' | 'err' | null>(null);
+
+  const [bugReportBusy, setBugReportBusy] = useState(false);
+  const [bugReportResult, setBugReportResult] = useState<{
+    kind: 'ok' | 'err';
+    message: string;
+  } | null>(null);
+
+  async function runBugReport(): Promise<void> {
+    setBugReportBusy(true);
+    setBugReportResult({
+      kind: 'ok',
+      message: 'Collecting diagnostics — this can take up to a few minutes…',
+    });
+    try {
+      const r = await downloadBugReport();
+      saveBlob(r.filename, r.blob);
+      const seconds = Math.round(r.durationMs / 1000);
+      setBugReportResult({
+        kind: 'ok',
+        message: `Downloaded ${r.filename} (${fmtSize(r.sizeBytes)}, took ${seconds}s).`,
+      });
+    } catch (err) {
+      const apiErr = err as ApiError;
+      const lines = ['Bug report failed:', apiErr.message];
+      if (apiErr.body && typeof apiErr.body === 'object' && apiErr.body !== null) {
+        // Surface stderr from the host script so the operator can see
+        // what the bash side complained about — most failures here are
+        // "host-script-missing" or "unsupported-flag" and the detail
+        // tells them exactly which "signalk update" / installer rerun
+        // would fix it.
+        const body = apiErr.body as { detail?: string; stderr?: string };
+        if (typeof body.detail === 'string') lines.push('', body.detail);
+        if (typeof body.stderr === 'string' && body.stderr.trim() !== '') {
+          lines.push('', '— stderr —', body.stderr.trim());
+        }
+      }
+      setBugReportResult({ kind: 'err', message: lines.join('\n') });
+    } finally {
+      setBugReportBusy(false);
+    }
+  }
 
   function askConfirm(target: Target): void {
     setConfirm({ target, ...PROMPTS[target] });
@@ -112,6 +160,36 @@ export function Recover() {
               className="mt-3 mb-0"
             >
               <pre className="mb-0 small">{result}</pre>
+            </Alert>
+          )}
+        </CardBody>
+      </Card>
+
+      <Card className="mb-3">
+        <CardHeader>
+          <strong>Bug report</strong>
+        </CardHeader>
+        <CardBody>
+          <p>
+            Bundle host journals, container state, Quadlets, and redacted SignalK config into a
+            tarball you can attach to an issue. Auth tokens and plugin config bodies are not
+            included; <code>settings.json</code> is included with <code>pipedProviders</code>{' '}
+            options redacted.
+          </p>
+          <p className="text-muted small">
+            The doctor delegates to the host <code>signalk bug-report</code> script over its DBus
+            mount, so the result is byte-for-byte the same bundle{' '}
+            <code>ssh + signalk bug-report</code> produces. Saved to your browser's Downloads
+            folder; the last few bundles are also kept on the host under{' '}
+            <code>~/.signalk-doctor/bug-reports/</code>.
+          </p>
+          <Button color="primary" disabled={bugReportBusy} onClick={() => void runBugReport()}>
+            {bugReportBusy && <Spinner size="sm" className="me-2" />}
+            {bugReportBusy ? 'Generating…' : 'Generate bug report'}
+          </Button>
+          {bugReportResult !== null && (
+            <Alert color={bugReportResult.kind === 'ok' ? 'info' : 'danger'} className="mt-3 mb-0">
+              <pre className="mb-0 small">{bugReportResult.message}</pre>
             </Alert>
           )}
         </CardBody>
