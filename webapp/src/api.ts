@@ -331,6 +331,19 @@ export function saveBlob(filename: string, blob: Blob): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Generate a 128-bit hex random string via the web crypto API.
+ *  Same entropy as `crypto.randomUUID()` (which we can't use here:
+ *  `randomUUID` is gated to secure contexts only, and the Doctor
+ *  Console is normally served over plain http on the boat's LAN —
+ *  192.168.0.x:3004 is not a secure context, so the call throws
+ *  "crypto.randomUUID is not a function"). `getRandomValues` works
+ *  in every context including http. */
+function randomHex16(): string {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** Upload a bug-report tarball to filebin.net and return the
  *  publicly-accessible URL.
  *
@@ -338,16 +351,16 @@ export function saveBlob(filename: string, blob: Blob): void {
  *  (Access-Control-Allow-Origin: *), so the browser can POST directly
  *  — no server-side relay needed. The bin name is the only access
  *  control filebin offers; we use a cryptographically random suffix
- *  (`crypto.randomUUID`, 122 bits of entropy) plus an ISO timestamp
- *  prefix so the URL is unguessable in practice. Bins auto-expire
- *  after ~6 days regardless.
+ *  (128 bits of entropy via `crypto.getRandomValues`) plus an ISO
+ *  timestamp prefix so the URL is unguessable in practice. Bins
+ *  auto-expire after ~6 days regardless.
  *
  *  The bash `signalk bug-report` helper uses `$RANDOM` (15 bits) for
  *  the same purpose. That's weaker, but the doctor's webapp has
  *  access to the web crypto API and should use it. */
 export async function uploadToFilebin(filename: string, blob: Blob): Promise<string> {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
-  const rand = crypto.randomUUID().replace(/-/g, '');
+  const rand = randomHex16();
   const bin = `signalk-${stamp}-${rand}`;
   const url = `https://filebin.net/${bin}/${encodeURIComponent(filename)}`;
   const res = await fetch(url, {
