@@ -320,17 +320,18 @@ export function saveBlob(filename: string, blob: Blob): void {
  *
  *  filebin.net is unauthenticated public storage with wide-open CORS
  *  (Access-Control-Allow-Origin: *), so the browser can POST directly
- *  — no server-side relay needed. Bin names mix timestamp + Math.random
- *  so guessing the URL is infeasible, which is the only access control
- *  filebin offers. Bins auto-expire after ~6 days.
+ *  — no server-side relay needed. The bin name is the only access
+ *  control filebin offers; we use a cryptographically random suffix
+ *  (`crypto.randomUUID`, 122 bits of entropy) plus an ISO timestamp
+ *  prefix so the URL is unguessable in practice. Bins auto-expire
+ *  after ~6 days regardless.
  *
- *  Mirrors the bash `signalk bug-report` upload flow so the two
- *  surfaces produce the same kind of bin URL. The bash flow uses
- *  $RANDOM (POSIX); browser uses Math.random; functionally equivalent
- *  for "unguessable suffix". */
+ *  The bash `signalk bug-report` helper uses `$RANDOM` (15 bits) for
+ *  the same purpose. That's weaker, but the doctor's webapp has
+ *  access to the web crypto API and should use it. */
 export async function uploadToFilebin(filename: string, blob: Blob): Promise<string> {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
-  const rand = Math.floor(Math.random() * 1_000_000).toString();
+  const rand = crypto.randomUUID().replace(/-/g, '');
   const bin = `signalk-${stamp}-${rand}`;
   const url = `https://filebin.net/${bin}/${encodeURIComponent(filename)}`;
   const res = await fetch(url, {
