@@ -347,27 +347,37 @@ function randomHex16(): string {
 /** Upload a bug-report tarball to filebin.net and return the
  *  publicly-accessible URL.
  *
- *  filebin.net is unauthenticated public storage with wide-open CORS
- *  (Access-Control-Allow-Origin: *), so the browser can POST directly
- *  — no server-side relay needed. The bin name is the only access
- *  control filebin offers; we use a cryptographically random suffix
- *  (128 bits of entropy via `crypto.getRandomValues`) plus an ISO
- *  timestamp prefix so the URL is unguessable in practice. Bins
- *  auto-expire after ~6 days regardless.
+ *  filebin.net is unauthenticated public storage. Its CORS reply
+ *  includes `Access-Control-Allow-Origin: *` but does NOT echo
+ *  `Access-Control-Allow-Methods` or `Access-Control-Allow-Headers`
+ *  — so any CORS-preflighted request fails with "Failed to fetch"
+ *  in the browser. We sidestep the preflight by issuing a "simple
+ *  request" per the CORS spec: no custom Content-Type, no custom
+ *  headers, just `POST` with the body. Filebin doesn't need an
+ *  explicit Content-Type anyway — it infers from extension.
  *
- *  The bash `signalk bug-report` helper uses `$RANDOM` (15 bits) for
- *  the same purpose. That's weaker, but the doctor's webapp has
- *  access to the web crypto API and should use it. */
+ *  The `new Blob([blob], { type: '' })` re-wrap is required because
+ *  `fetch(url, { body: blob })` reads `blob.type` and sets the
+ *  Content-Type header from it. The incoming blob came from
+ *  `res.blob()` on `/api/bug-report` which had
+ *  `Content-Type: application/gzip` — so the original blob inherits
+ *  that, and a naive `body: blob` would re-add the header, trip the
+ *  preflight, and break the upload.
+ *
+ *  The bin name is the only access control filebin offers; we use
+ *  a cryptographically random suffix (128 bits of entropy via
+ *  `crypto.getRandomValues`) plus an ISO timestamp prefix so the URL
+ *  is unguessable in practice. Bins auto-expire after ~6 days
+ *  regardless. */
 export async function uploadToFilebin(filename: string, blob: Blob): Promise<string> {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
   const rand = randomHex16();
   const bin = `signalk-${stamp}-${rand}`;
   const url = `https://filebin.net/${bin}/${encodeURIComponent(filename)}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/gzip' },
-    body: blob,
-  });
+  // Strip the blob's Content-Type so fetch doesn't auto-set a header
+  // that would force a CORS preflight. See docblock above.
+  const untyped = new Blob([blob], { type: '' });
+  const res = await fetch(url, { method: 'POST', body: untyped });
   if (!res.ok) {
     throw new Error(`filebin upload failed: HTTP ${res.status}`);
   }
