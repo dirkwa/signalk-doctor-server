@@ -315,6 +315,51 @@ export function saveBlob(filename: string, blob: Blob): void {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Upload a bug-report tarball to filebin.net and return the
+ *  publicly-accessible URL.
+ *
+ *  filebin.net is unauthenticated public storage with wide-open CORS
+ *  (Access-Control-Allow-Origin: *), so the browser can POST directly
+ *  — no server-side relay needed. The bin name is the only access
+ *  control filebin offers; we use a cryptographically random suffix
+ *  (`crypto.randomUUID`, 122 bits of entropy) plus an ISO timestamp
+ *  prefix so the URL is unguessable in practice. Bins auto-expire
+ *  after ~6 days regardless.
+ *
+ *  The bash `signalk bug-report` helper uses `$RANDOM` (15 bits) for
+ *  the same purpose. That's weaker, but the doctor's webapp has
+ *  access to the web crypto API and should use it. */
+export async function uploadToFilebin(filename: string, blob: Blob): Promise<string> {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
+  const rand = crypto.randomUUID().replace(/-/g, '');
+  const bin = `signalk-${stamp}-${rand}`;
+  const url = `https://filebin.net/${bin}/${encodeURIComponent(filename)}`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/gzip' },
+    body: blob,
+  });
+  if (!res.ok) {
+    throw new Error(`filebin upload failed: HTTP ${res.status}`);
+  }
+  return url;
+}
+
+/** Build a github.com/.../issues/new URL with title + body pre-filled.
+ *  The body should be plain markdown — GitHub renders it inside the
+ *  textarea on the issue page.
+ *
+ *  Returned URL is meant for `window.open(url, '_blank')` so it lands
+ *  in a new tab; the calling page stays put. */
+export function buildGithubIssueUrl(opts: {
+  repo: string; // e.g. "SignalK/signalk-server"
+  title: string;
+  body: string;
+}): string {
+  const params = new URLSearchParams({ title: opts.title, body: opts.body });
+  return `https://github.com/${opts.repo}/issues/new?${params.toString()}`;
+}
+
 // ── Formatting helpers ──────────────────────────────────────
 
 export function fmtTime(iso: string | null | undefined): string {

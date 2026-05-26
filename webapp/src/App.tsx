@@ -7,9 +7,10 @@ import { Snapshots } from './views/Snapshots';
 import { Recover } from './views/Recover';
 import { Installer } from './views/Installer';
 import { Drift } from './views/Drift';
+import { BugReport } from './views/BugReport';
 import { UpdateBanner } from './components/UpdateBanner';
 
-type Route = 'health' | 'logs' | 'snapshots' | 'drift' | 'recover' | 'installer';
+type Route = 'health' | 'logs' | 'snapshots' | 'drift' | 'recover' | 'bug-report' | 'installer';
 
 const ROUTES: { id: Route; label: string }[] = [
   { id: 'health', label: 'Health' },
@@ -17,6 +18,7 @@ const ROUTES: { id: Route; label: string }[] = [
   { id: 'snapshots', label: 'Snapshots' },
   { id: 'drift', label: 'Drift' },
   { id: 'recover', label: 'Recovery' },
+  { id: 'bug-report', label: 'Bug report' },
   { id: 'installer', label: 'Installer' },
 ];
 
@@ -107,6 +109,7 @@ export function App() {
       {route === 'snapshots' && <Snapshots />}
       {route === 'drift' && <Drift />}
       {route === 'recover' && <Recover />}
+      {route === 'bug-report' && <BugReport />}
       {route === 'installer' && <Installer />}
     </Container>
   );
