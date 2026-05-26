@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { readdir, stat, mkdir, unlink } from 'node:fs/promises';
+import { readdir, readFile, stat, mkdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 // The host-side script the doctor delegates to. Bind-mounted into the
@@ -37,6 +37,67 @@ function bugReportTimeoutMs(): number {
 // killed before it could prune.
 const RETENTION = 5;
 
+/** Read `/proc/self/mountinfo` and return the host-side absolute path
+ *  that backs `containerPath`. Used to translate container-internal
+ *  paths (`/host-bin/signalk`, `/data/bug-reports`) into host paths
+ *  before passing them to systemd-run.
+ *
+ *  Why: `systemd-run --user --address=/host/dbus` does NOT run the
+ *  command inside the doctor container — it asks the host's user
+ *  systemd manager to fork-exec a transient unit, which resolves paths
+ *  in the host's filesystem namespace. The doctor's bind-mount layout
+ *  (/host-bin → ~/.local/bin, /data → ~/.signalk-doctor) is irrelevant
+ *  to that fork-exec; passing `/host-bin/signalk` produces
+ *  `status=203/EXEC` because /host-bin doesn't exist on the host.
+ *
+ *  Returns null when the mount can't be found (no matching entry, or
+ *  malformed mountinfo line); caller falls back to the container path
+ *  and reports an honest error if the exec subsequently fails. */
+async function resolveHostPath(containerPath: string): Promise<string | null> {
+  // Env-override so tests can feed a synthetic mountinfo without root.
+  const mountinfoPath = process.env.BUG_REPORT_MOUNTINFO_PATH ?? '/proc/self/mountinfo';
+  let raw: string;
+  try {
+    raw = await readFile(mountinfoPath, 'utf8');
+  } catch {
+    return null;
+  }
+  // mountinfo line format (we want fields 4 and 5):
+  //   <id> <parent> <maj:min> <root> <mount-point> <opts> ... - <type> <source> <super-opts>
+  // The bind-mount source ON THE HOST is field 4 ("root") when the
+  // mount source is a path; field 5 is the mount point INSIDE this
+  // namespace (what we match against). When `containerPath` is
+  // EXACTLY a mount point, the host path is field 4. When it's
+  // UNDER a mount point, we append the remainder.
+  const lines = raw.split('\n');
+  // Sort by mount-point length descending so the most-specific match
+  // wins (e.g. /data/foo before /data when both are present).
+  const candidates: Array<{ hostRoot: string; mountPoint: string }> = [];
+  for (const line of lines) {
+    const parts = line.split(' ');
+    if (parts.length < 5) continue;
+    const hostRoot = parts[3];
+    const mountPoint = parts[4];
+    if (hostRoot === undefined || mountPoint === undefined) continue;
+    candidates.push({ hostRoot, mountPoint });
+  }
+  candidates.sort((a, b) => b.mountPoint.length - a.mountPoint.length);
+  for (const c of candidates) {
+    if (containerPath === c.mountPoint) {
+      return c.hostRoot;
+    }
+    const prefix = c.mountPoint.endsWith('/') ? c.mountPoint : c.mountPoint + '/';
+    if (containerPath.startsWith(prefix)) {
+      const remainder = containerPath.slice(c.mountPoint.length);
+      // Use path.join so the join is correct when mountPoint is `/`
+      // (root): hand-rolled `base + remainder` would have stripped the
+      // leading slash from the result, producing a relative path.
+      return join(c.hostRoot, remainder);
+    }
+  }
+  return null;
+}
+
 export type BugReportResult =
   | { ok: true; path: string; filename: string; sizeBytes: number; durationMs: number }
   | {
@@ -44,6 +105,7 @@ export type BugReportResult =
       reason:
         | 'host-bin-missing'
         | 'host-script-missing'
+        | 'host-path-resolution-failed'
         | 'spawn-failed'
         | 'timeout'
         | 'nonzero-exit'
@@ -124,13 +186,28 @@ export async function generateBugReport(log?: SpawnLogger): Promise<BugReportRes
   const before = await listTarballs(outDir);
   const beforeSet = new Set(before);
 
+  // Translate the container-internal paths into host-side absolute
+  // paths before handing them to systemd-run. The transient unit
+  // fork-execs in the host's filesystem namespace, so /host-bin and
+  // /data don't exist there — passing them produces `status=203/EXEC`.
+  // See resolveHostPath() at the top of this file for the full
+  // mountinfo lookup story.
+  const hostHostScript = await resolveHostPath(hostScript);
+  const hostOutDir = await resolveHostPath(outDir);
+  if (hostHostScript === null || hostOutDir === null) {
+    return {
+      ok: false,
+      reason: 'host-path-resolution-failed',
+      detail: `could not resolve host paths from /proc/self/mountinfo for ${hostScript} and/or ${outDir}. The doctor expects the installer's bind mounts (~/.local/bin → /host-bin and ~/.signalk-doctor → /data). Rerun the bash installer to restore them.`,
+      durationMs: Date.now() - start,
+    };
+  }
+
   // Run via the host's user manager. --pipe + --wait gets stdout/stderr
   // back synchronously; --collect lets systemd garbage-collect the
   // transient unit after it exits even if we're slow to read its state.
   // --service-type=oneshot is the correct unit type for a "run to
-  // completion" command. -G (no isolation from the calling tty) lets
-  // the script's interactive prompts (which are skipped in non-tty mode
-  // anyway) not interfere.
+  // completion" command.
   const args = [
     '--user',
     '--pipe',
@@ -139,10 +216,10 @@ export async function generateBugReport(log?: SpawnLogger): Promise<BugReportRes
     '--service-type=oneshot',
     '--quiet',
     '--',
-    hostScript,
+    hostHostScript,
     'bug-report',
     '--to',
-    outDir,
+    hostOutDir,
   ];
 
   // DBUS_SESSION_BUS_ADDRESS is set by the Quadlet (Environment=...).
