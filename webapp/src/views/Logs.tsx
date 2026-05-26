@@ -39,10 +39,21 @@ interface RowProps {
 }
 
 function LogRow({ line }: RowProps) {
+  // "~" prefix flags rows whose timestamp was stamped at SSE arrival because
+  // the source line carried no embedded time (signalk-server's morgan logger
+  // omits one). Tooltip explains the convention so users can tell at a glance
+  // which timestamps came from the source vs the proxy.
+  const timeText = line.time ? `${line.timeApproximated ? '~' : ''}${fmtLogTime(line.time)}` : '';
   return (
     <div className={`d-flex font-monospace small ${levelTextClass(line.level)}`}>
-      <span className="text-muted me-2" style={{ minWidth: '4.5rem' }}>
-        {fmtLogTime(line.time)}
+      <span
+        className="text-muted me-2"
+        style={{ minWidth: '4.5rem' }}
+        title={
+          line.timeApproximated ? 'Source line had no timestamp; using SSE arrival time' : undefined
+        }
+      >
+        {timeText}
       </span>
       <span className="text-uppercase me-2" style={{ minWidth: '3.5rem' }}>
         {line.level}
@@ -136,7 +147,16 @@ export function Logs() {
         ref={outputRef}
         onScroll={handleScroll}
         className="bg-body-tertiary border rounded p-2"
-        style={{ height: '60vh', overflowY: 'auto' }}
+        style={{
+          // Fill the visible viewport minus the page header (logo + tabs +
+          // filter row). The 240px allowance is a one-time approximation;
+          // min-height keeps the panel usable on very short windows. Was
+          // a fixed 60vh, which left empty space below the log box when
+          // iframed in the SignalK admin sidebar.
+          height: 'calc(100vh - 240px)',
+          minHeight: '20vh',
+          overflowY: 'auto',
+        }}
       >
         {lines.length === 0 ? (
           <div className="text-muted">Connecting…</div>

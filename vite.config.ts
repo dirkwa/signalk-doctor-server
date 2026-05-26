@@ -10,10 +10,20 @@ const pkgVersion = (
   JSON.parse(readFileSync(resolve(here, 'package.json'), 'utf-8')) as { version: string }
 ).version;
 
+// Relative base. Two consumers:
+// 1. Standalone at :3004 — asset URLs like ./assets/index.js resolve
+//    against the page URL (always /), so they end up at /assets/index.js
+//    just like an absolute base would.
+// 2. Embedded by the signalk-doctor plugin — the plugin reverse-proxies
+//    us under /plugins/signalk-doctor/console/. Relative asset URLs
+//    there resolve against /plugins/signalk-doctor/console/, keeping
+//    every asset request inside the proxy's namespace.
+// API paths take a separate path via the <meta name="api-base"> tag
+// the plugin injects — see api.ts readApiBase().
 export default defineConfig({
   plugins: [react()],
   define: { __APP_VERSION__: JSON.stringify(pkgVersion) },
-  base: '/',
+  base: './',
   root: resolve(here, 'webapp'),
   build: {
     outDir: resolve(here, 'webapp-dist'),
