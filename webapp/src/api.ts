@@ -236,11 +236,18 @@ export async function downloadBugReport(): Promise<BugReportSuccess> {
   const res = await fetch(`${API_BASE}/bug-report`, init);
   if (!res.ok) {
     // Error responses come back as JSON: { error, reason, ... }.
+    // Read as text first so we can fall back gracefully on parse
+    // failure — calling res.json() then res.text() doesn't work
+    // because the body stream is consumed on the first read. Same
+    // pattern as request<T> above.
+    const text = await res.text();
     let body: unknown = null;
-    try {
-      body = await res.json();
-    } catch {
-      body = await res.text().catch(() => null);
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = text;
+      }
     }
     const msg =
       body && typeof body === 'object' && 'error' in body && typeof body.error === 'string'
