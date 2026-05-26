@@ -16,15 +16,33 @@ interface Sandbox {
   pathDir: string;
   hostBinDir: string;
   bugReportDir: string;
+  mountinfoPath: string;
   origPath: string | undefined;
   origHostBin: string | undefined;
   origBugReportDir: string | undefined;
+  origMountinfo: string | undefined;
+}
+
+/** Write a fake `/proc/self/mountinfo` that maps the sandbox's
+ *  hostBinDir and bugReportDir to themselves. In production the doctor
+ *  reads real mountinfo and translates container paths (/host-bin,
+ *  /data) into host paths (~/.local/bin, ~/.signalk-doctor); for tests
+ *  the sandbox dirs play both roles, so identity mappings work. */
+async function writeFakeMountinfo(sb: Sandbox): Promise<void> {
+  // mountinfo line format the resolver parses (only fields 4 + 5 matter):
+  //   <id> <parent> <maj:min> <root> <mount-point> <opts> ... - <type> <source> <super-opts>
+  const lines = [
+    `1 0 8:1 ${sb.hostBinDir} ${sb.hostBinDir} rw - tmpfs tmpfs rw`,
+    `2 0 8:1 ${sb.bugReportDir} ${sb.bugReportDir} rw - tmpfs tmpfs rw`,
+  ];
+  await writeFile(sb.mountinfoPath, lines.join('\n') + '\n');
 }
 
 async function activateSandbox(sb: Sandbox): Promise<void> {
   process.env.PATH = `${sb.pathDir}:${sb.origPath ?? ''}`;
   process.env.HOST_BIN_DIR = sb.hostBinDir;
   process.env.BUG_REPORT_DIR = sb.bugReportDir;
+  process.env.BUG_REPORT_MOUNTINFO_PATH = sb.mountinfoPath;
 }
 
 async function teardown(sb: Sandbox, root: string): Promise<void> {
@@ -33,6 +51,8 @@ async function teardown(sb: Sandbox, root: string): Promise<void> {
   else process.env.HOST_BIN_DIR = sb.origHostBin;
   if (sb.origBugReportDir === undefined) delete process.env.BUG_REPORT_DIR;
   else process.env.BUG_REPORT_DIR = sb.origBugReportDir;
+  if (sb.origMountinfo === undefined) delete process.env.BUG_REPORT_MOUNTINFO_PATH;
+  else process.env.BUG_REPORT_MOUNTINFO_PATH = sb.origMountinfo;
   await rm(root, { recursive: true, force: true });
 }
 
@@ -80,13 +100,16 @@ describe('generateBugReport', () => {
       pathDir: join(root, 'path'),
       hostBinDir: join(root, 'host-bin'),
       bugReportDir: join(root, 'bug-reports'),
+      mountinfoPath: join(root, 'mountinfo'),
       origPath: process.env.PATH,
       origHostBin: process.env.HOST_BIN_DIR,
       origBugReportDir: process.env.BUG_REPORT_DIR,
+      origMountinfo: process.env.BUG_REPORT_MOUNTINFO_PATH,
     };
     // Don't pre-create hostBinDir here — some tests want it missing.
     const { mkdir } = await import('node:fs/promises');
     await mkdir(sb.pathDir, { recursive: true });
+    await writeFakeMountinfo(sb);
     await activateSandbox(sb);
   });
 
@@ -238,6 +261,21 @@ describe('generateBugReport', () => {
     if (r.ok) return;
     expect(r.reason).toBe('spawn-failed');
     expect(r.detail).toMatch(/ENOENT|not found|systemd-run/i);
+  });
+
+  it('reports host-path-resolution-failed when mountinfo lacks the host-bin/data mounts', async () => {
+    const { mkdir } = await import('node:fs/promises');
+    await mkdir(sb.hostBinDir, { recursive: true });
+    await writeExecutable(join(sb.hostBinDir, 'signalk'), '#!/usr/bin/env bash\necho host\n');
+    // Overwrite the fake mountinfo with one that doesn't cover the
+    // sandbox dirs — simulates a doctor running on a host that
+    // doesn't have the expected bind-mounts.
+    await writeFile(sb.mountinfoPath, '1 0 8:1 /elsewhere /elsewhere rw - tmpfs tmpfs rw\n');
+    const r = await generateBugReport();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('host-path-resolution-failed');
+    expect(r.detail).toMatch(/could not resolve host paths/);
   });
 
   it('reports timeout when systemd-run does not finish in BUG_REPORT_TIMEOUT_MS', async () => {
