@@ -47,6 +47,20 @@ function shellQuote(s: string): string {
   return `'${s.replace(/'/g, "'\\''")}'`;
 }
 
+/** Decode the octal escapes mountinfo uses for special chars in path
+ *  fields. Per `man proc_pid_mountinfo`, the kernel encodes space
+ *  (`\040`), tab (`\011`), newline (`\012`), and backslash (`\134`)
+ *  this way in fields 4 (root) and 5 (mount point). If we don't undo
+ *  them, an operator whose home is `/home/Dirk Smith/` would see
+ *  `/home/Dirk\040Smith/.local/bin/signalk` come back from
+ *  resolveHostPath, then shellQuote would wrap that literal backslash-
+ *  octal sequence and `sh -c` would fail to find the file. */
+function unescapeMountinfoField(s: string): string {
+  return s.replace(/\\([0-7]{3})/g, (_m, oct: string) =>
+    String.fromCharCode(Number.parseInt(oct, 8)),
+  );
+}
+
 /** Read `/proc/self/mountinfo` and return the host-side absolute path
  *  that backs `containerPath`. Used to translate container-internal
  *  paths (`/host-bin/signalk`, `/data/bug-reports`) into host paths
@@ -86,10 +100,13 @@ async function resolveHostPath(containerPath: string): Promise<string | null> {
   for (const line of lines) {
     const parts = line.split(' ');
     if (parts.length < 5) continue;
-    const hostRoot = parts[3];
-    const mountPoint = parts[4];
-    if (hostRoot === undefined || mountPoint === undefined) continue;
-    candidates.push({ hostRoot, mountPoint });
+    const hostRootRaw = parts[3];
+    const mountPointRaw = parts[4];
+    if (hostRootRaw === undefined || mountPointRaw === undefined) continue;
+    candidates.push({
+      hostRoot: unescapeMountinfoField(hostRootRaw),
+      mountPoint: unescapeMountinfoField(mountPointRaw),
+    });
   }
   candidates.sort((a, b) => b.mountPoint.length - a.mountPoint.length);
   for (const c of candidates) {
