@@ -216,6 +216,40 @@ export function refreshInstaller(): Promise<InstallerRefreshResponse> {
   return request<InstallerRefreshResponse>('/installer/refresh', { method: 'POST' });
 }
 
+// ── Drift report ────────────────────────────────────────────
+
+export type DriftClassification =
+  | 'up-to-date'
+  | 'patch'
+  | 'minor'
+  | 'major'
+  | 'prerelease'
+  | 'unknown';
+
+export interface DriftPackage {
+  name: string;
+  installed: string;
+  latest: string | null;
+  classification: DriftClassification;
+  lastFetchedAt: string | null;
+}
+
+export interface DriftReport {
+  signalkImageTag: string | null;
+  lastScannedAt: string;
+  lastSuccessfulScanAt: string | null;
+  online: boolean;
+  packages: DriftPackage[];
+}
+
+export function getDrift(): Promise<DriftReport> {
+  return request<DriftReport>('/drift');
+}
+
+export function refreshDrift(): Promise<DriftReport> {
+  return request<DriftReport>('/drift/refresh', { method: 'POST' });
+}
+
 // ── Bug report ──────────────────────────────────────────────
 
 export interface BugReportSuccess {
