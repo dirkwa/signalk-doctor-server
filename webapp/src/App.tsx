@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Container, Nav, NavItem, NavLink } from 'reactstrap';
 import { getHealth } from './api';
 import { Health } from './views/Health';
@@ -58,14 +58,6 @@ export function App() {
       });
   }, []);
 
-  // Updater Console runs as its own peer container on port 3003.
-  // Mirror the host/protocol the user reached us on so links work
-  // behind reverse proxies and arbitrary hostnames.
-  const updaterUrl = useMemo(() => {
-    const { protocol, hostname } = window.location;
-    return `${protocol}//${hostname}:3003/`;
-  }, []);
-
   return (
     <Container className="py-4">
       <div className="d-flex align-items-center mb-4">
@@ -86,7 +78,7 @@ export function App() {
         <span className="ms-auto text-muted small font-monospace">v{__APP_VERSION__}</span>
       </div>
 
-      <UpdateBanner updaterUrl={updaterUrl} />
+      <UpdateBanner />
 
       <Nav tabs className="mb-3 align-items-end">
         {ROUTES.map((r) => (
@@ -103,11 +95,6 @@ export function App() {
             </NavLink>
           </NavItem>
         ))}
-        <NavItem className="ms-auto">
-          <NavLink href={updaterUrl} target="_blank" rel="noopener noreferrer">
-            Open Updater Console ↗
-          </NavLink>
-        </NavItem>
       </Nav>
 
       {route === 'health' && <Health />}
