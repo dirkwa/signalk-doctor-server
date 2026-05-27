@@ -1,10 +1,10 @@
 import { getSignalkAdminToken, invalidateSignalkAdminTokenCache } from './signalk-token.js';
+import { signalkHttpUrl } from '../probes/signalk-url.js';
 
-// Same env override the existing signalk-health probe uses; we strip the
+// Same HTTP endpoint the signalk-health probe uses; we strip the
 // `/signalk` suffix because the diagnostics route lives under `/skServer`.
 function signalkBase(): string {
-  const url = process.env.SIGNALK_URL ?? 'http://host.containers.internal:3000/signalk';
-  return url.replace(/\/signalk\/?$/, '');
+  return signalkHttpUrl().replace(/\/signalk\/?$/, '');
 }
 
 export interface InstalledPackage {
