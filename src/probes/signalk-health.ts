@@ -81,7 +81,7 @@ export async function probeSignalkHealth(): Promise<ProbeResult> {
           t0,
         );
       }
-      return await probeHttps(httpsUrl, t0, 'redirect');
+      return (await probeHttps(httpsUrl, t0, 'redirect')).result;
     }
 
     // Server is up but unhealthy (5xx, etc.) — surface it; don't mask
@@ -95,7 +95,9 @@ export async function probeSignalkHealth(): Promise<ProbeResult> {
 
   if (httpsUrl) {
     const viaHttps = await probeHttps(httpsUrl, t0, 'fallback');
-    if (viaHttps.status === 'ok') return viaHttps;
+    // HTTPS answered: report it — ok, or a reachable-but-unhealthy
+    // status that's more informative than the HTTP-refused error below.
+    if (viaHttps.reachable) return viaHttps.result;
   }
 
   const msg = httpErr instanceof Error ? httpErr.message : String(httpErr);
@@ -105,22 +107,25 @@ export async function probeSignalkHealth(): Promise<ProbeResult> {
 
 /** Fetch the HTTPS endpoint with TLS verification relaxed. `reason`
  *  shapes the success message: a redirect from :80 (SSL confirmed) vs a
- *  last-resort fallback after HTTP refused. */
+ *  last-resort fallback after HTTP refused. `reachable` reports whether
+ *  HTTPS answered at all (any status) vs the fetch throwing, so the
+ *  fallback caller can prefer a reachable-but-unhealthy HTTPS result
+ *  over a bare HTTP-refused message. */
 async function probeHttps(
   httpsUrl: string,
   t0: number,
   reason: 'redirect' | 'fallback',
-): Promise<ProbeResult> {
+): Promise<{ result: ProbeResult; reachable: boolean }> {
   try {
     const res = await hop(httpsUrl, { tlsRelaxed: true });
     if (res.ok) {
       const note =
         reason === 'redirect' ? ' (SSL enabled, redirected from HTTP)' : ' (SSL enabled)';
-      return ok(`HTTP ${res.status} from ${httpsUrl}${note}`, t0);
+      return { result: ok(`HTTP ${res.status} from ${httpsUrl}${note}`, t0), reachable: true };
     }
-    return fail(`HTTP ${res.status} from ${httpsUrl}`, t0);
+    return { result: fail(`HTTP ${res.status} from ${httpsUrl}`, t0), reachable: true };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return fail(`cannot reach ${httpsUrl}: ${msg}`, t0);
+    return { result: fail(`cannot reach ${httpsUrl}: ${msg}`, t0), reachable: false };
   }
 }

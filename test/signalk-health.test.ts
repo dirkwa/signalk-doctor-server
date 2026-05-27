@@ -114,6 +114,16 @@ describe('probeSignalkHealth', () => {
     expect(r.message).toContain(HTTPS);
   });
 
+  it('surfaces the HTTPS status when HTTP refuses but HTTPS answers unhealthy', async () => {
+    fetchSpy.mockImplementationOnce(refused).mockResolvedValueOnce(res({ status: 503, ok: false }));
+    const r = await probeSignalkHealth();
+    expect(r.status).toBe('fail');
+    // The reachable HTTPS 503 is more informative than the HTTP-refused error.
+    expect(r.message).toContain('503');
+    expect(r.message).toContain(HTTPS);
+    expect(r.message).not.toMatch(/cannot reach signalk-server on/);
+  });
+
   it('fails on an HTTP 5xx without falling back to HTTPS', async () => {
     fetchSpy.mockResolvedValueOnce(res({ status: 503, ok: false }));
     const r = await probeSignalkHealth();
