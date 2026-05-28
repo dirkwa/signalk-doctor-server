@@ -21,6 +21,14 @@ describe('cgroup-delegation probe', () => {
     dir = await mkdtemp(join(tmpdir(), 'cgroup-probe-'));
     process.env[ENV_ROOT] = dir;
     process.env[ENV_CMDLINE] = join(dir, 'cmdline');
+    // Seed an identity uid_map so the baseline cases below are
+    // deterministic regardless of whether the test runner happens to be
+    // inside a user namespace (a CI runner using Sysbox, rootless
+    // podman, etc., can have a non-identity /proc/self/uid_map). The
+    // rootless-specific tests below overwrite this fixture.
+    const uidMapFixture = join(dir, 'uid_map');
+    process.env[ENV_UID_MAP] = uidMapFixture;
+    await writeFile(uidMapFixture, '0 0 4294967295\n');
     // Each test starts with a fresh host-UID resolution so the env
     // overrides below are honoured rather than picking up a cached
     // value from a prior test.
