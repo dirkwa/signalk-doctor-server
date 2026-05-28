@@ -6,9 +6,56 @@ import type { ProbeResult } from './types.js';
 // can override via env without bouncing the module — runtime cost negligible.
 const cgroupRoot = (): string => process.env.HOST_CGROUP_ROOT ?? '/host/cgroup';
 const cmdlinePath = (): string => process.env.HOST_CMDLINE_PATH ?? '/host/proc/cmdline';
+const uidMapPath = (): string => process.env.UID_MAP_PATH ?? '/proc/self/uid_map';
 
-// Operator UID — same UID the doctor runs as under rootless podman.
-const OPERATOR_UID = process.getuid?.() ?? 0;
+// The operator UID we need is the **host** UID that owns the doctor's
+// rootless container — that's the one with a materialised
+// `user.slice/user-<UID>.slice` on the host cgroup tree we bind-mount.
+// `process.getuid()` returns 0 inside a rootless userns (in-container
+// root), so it points at `user-0.slice`, which doesn't exist and made
+// the probe report a false "user slice not materialised yet". The
+// kernel exposes the in-container -> host UID mapping at
+// /proc/self/uid_map; parse the row that contains the in-container
+// uid and return the corresponding host uid. Outside a userns the map
+// is the identity (`0 0 4294967295`), so the same parse returns
+// getuid() and the probe behaves as before.
+//
+// Resolved once on first use, then cached — uid_map is fixed for the
+// lifetime of the process.
+let cachedHostUid: number | null = null;
+
+async function resolveHostUid(): Promise<number> {
+  if (cachedHostUid !== null) return cachedHostUid;
+  const inContainerUid = process.getuid?.() ?? 0;
+  try {
+    const raw = await readFile(uidMapPath(), 'utf-8');
+    for (const line of raw.split('\n')) {
+      // Each row: `<in_container_uid_start> <host_uid_start> <count>`.
+      const parts = line.trim().split(/\s+/);
+      if (parts.length < 3) continue;
+      const inStart = Number(parts[0]);
+      const hostStart = Number(parts[1]);
+      const count = Number(parts[2]);
+      if (!Number.isFinite(inStart) || !Number.isFinite(hostStart) || !Number.isFinite(count)) {
+        continue;
+      }
+      if (inContainerUid >= inStart && inContainerUid < inStart + count) {
+        cachedHostUid = hostStart + (inContainerUid - inStart);
+        return cachedHostUid;
+      }
+    }
+  } catch {
+    // /proc/self/uid_map missing or unreadable — fall through.
+  }
+  cachedHostUid = inContainerUid;
+  return cachedHostUid;
+}
+
+/** Test seam: drop the cached host UID so a test that swaps UID_MAP_PATH
+ *  in beforeEach gets a fresh resolution. */
+export function __resetHostUidCacheForTests(): void {
+  cachedHostUid = null;
+}
 
 const REQUIRED_CONTROLLERS = ['memory', 'pids'] as const;
 
@@ -58,6 +105,7 @@ function missing(controllers: string[]): string[] {
 export async function probeCgroupDelegation(): Promise<ProbeResult> {
   const t0 = Date.now();
   const root = cgroupRoot();
+  const operatorUid = await resolveHostUid();
 
   const rootControllers = await readControllers(`${root}/cgroup.controllers`);
   if (rootControllers === null) {
@@ -109,7 +157,7 @@ export async function probeCgroupDelegation(): Promise<ProbeResult> {
     };
   }
 
-  const userSlicePath = `${root}/user.slice/user-${OPERATOR_UID}.slice/cgroup.controllers`;
+  const userSlicePath = `${root}/user.slice/user-${operatorUid}.slice/cgroup.controllers`;
   const userControllers = await readControllers(userSlicePath);
   if (userControllers === null) {
     // Root passes but user slice isn't materialised yet (linger off, or
@@ -131,7 +179,7 @@ export async function probeCgroupDelegation(): Promise<ProbeResult> {
       id: 'cgroup-delegation',
       label: LABEL,
       status: 'warn',
-      message: `Layer 2 — user-${OPERATOR_UID}.slice missing delegated controller(s) ${userMissing.join(', ')}. Container resource limits will silently no-op. Remediation:\n${RECIPE_USER_SLICE_DELEGATION}`,
+      message: `Layer 2 — user-${operatorUid}.slice missing delegated controller(s) ${userMissing.join(', ')}. Container resource limits will silently no-op. Remediation:\n${RECIPE_USER_SLICE_DELEGATION}`,
       details: {
         layer: 2,
         rootControllers,
@@ -147,7 +195,7 @@ export async function probeCgroupDelegation(): Promise<ProbeResult> {
     id: 'cgroup-delegation',
     label: LABEL,
     status: 'ok',
-    message: `both layers OK (root: ${rootControllers.join(' ')} | user-${OPERATOR_UID}.slice: ${userControllers.join(' ')})`,
+    message: `both layers OK (root: ${rootControllers.join(' ')} | user-${operatorUid}.slice: ${userControllers.join(' ')})`,
     details: { layer: 0, rootControllers, userControllers },
     durationMs: Date.now() - t0,
   };
