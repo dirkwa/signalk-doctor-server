@@ -18,6 +18,10 @@ const RECOVERY_TMPL = `#!/usr/bin/env bash
 echo "signalk-recovery"
 `;
 
+const SOCKETCAN_TMPL = `#!/usr/bin/env bash
+echo "signalk-socketcan"
+`;
+
 const QUADLET_TMPL = `[Unit]
 Description=Test
 [Container]
@@ -38,6 +42,10 @@ const FIXTURES: Record<string, RouteFixture> = {
   '/installer/linux/signalk-recovery.tmpl': {
     expectedSubstr: 'signalk-recovery',
     body: RECOVERY_TMPL,
+  },
+  '/installer/linux/signalk-socketcan.tmpl': {
+    expectedSubstr: 'signalk-socketcan',
+    body: SOCKETCAN_TMPL,
   },
   '/installer/linux/detect-hardware.sh': { expectedSubstr: 'detectedAt', body: DETECT_SCRIPT },
   '/quadlets/signalk-server.container.template': {
@@ -153,7 +161,7 @@ describe('installer-refresh routes', () => {
     const body = res.json();
     expect(body.hostBinMounted).toBe(true);
     expect(body.pagesBase).toBe(pages.baseUrl);
-    expect(body.artifacts).toHaveLength(6);
+    expect(body.artifacts).toHaveLength(7);
     expect(body.artifacts.every((a: { present: boolean }) => a.present === false)).toBe(true);
     await app.close();
   });
@@ -174,7 +182,7 @@ describe('installer-refresh routes', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.counts.updated).toBe(6);
+    expect(body.counts.updated).toBe(7);
     expect(body.counts['fetch-failed']).toBe(0);
     expect(body.counts['mount-missing']).toBe(0);
 
@@ -187,6 +195,10 @@ describe('installer-refresh routes', () => {
     // recovery is byte-for-byte identical (no substitution).
     const recoveryBody = await readFile(join(hostBin, 'signalk-recovery'), 'utf8');
     expect(recoveryBody).toBe(RECOVERY_TMPL);
+
+    // socketcan helper is byte-for-byte identical (no substitution).
+    const socketcanBody = await readFile(join(hostBin, 'signalk-socketcan'), 'utf8');
+    expect(socketcanBody).toBe(SOCKETCAN_TMPL);
 
     // Quadlet templates are NOT substituted by the doctor; they're written
     // verbatim into the payload dir for the bash installer's render step.
@@ -220,7 +232,7 @@ describe('installer-refresh routes', () => {
     });
     expect(res2.statusCode).toBe(200);
     const body2 = res2.json();
-    expect(body2.counts.unchanged).toBe(6);
+    expect(body2.counts.unchanged).toBe(7);
     expect(body2.counts.updated).toBe(0);
 
     const secondSnapshots = await readdir(join(dir, 'installer-snapshots')).catch(
@@ -267,7 +279,7 @@ describe('installer-refresh routes', () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.counts['mount-missing']).toBe(2); // signalk + signalk-recovery
+      expect(body.counts['mount-missing']).toBe(3); // signalk + signalk-recovery + signalk-socketcan
       expect(body.counts.updated).toBe(4); // detect + 3 quadlets
       await app.close();
     } finally {
