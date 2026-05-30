@@ -5,12 +5,12 @@ import { join } from 'node:path';
 import { createServer } from '../src/server.js';
 import { __resetTokenCacheForTests } from '../src/auth.js';
 
-// Minimal mock of the GitHub Pages payload. The dispatcher template is the
-// real signalk.tmpl shape — placeholder + a single command — so we can prove
-// the substitution and chmod happen correctly without dragging in 600 lines
-// of bash.
+// Minimal mock of the GitHub Pages payload. The dispatcher template's
+// __SK_VERSION__ placeholder is substituted upstream by the installer-repo
+// Pages workflow at deploy time, so the body served here mirrors what the
+// doctor actually fetches from Pages — version already baked in.
 const SIGNALK_TMPL = `#!/usr/bin/env bash
-SK_VERSION="__SK_VERSION__"
+SK_VERSION="1.2.3-test"
 echo "signalk $SK_VERSION"
 `;
 
@@ -34,7 +34,7 @@ interface RouteFixture {
 }
 
 const FIXTURES: Record<string, RouteFixture> = {
-  '/installer/linux/signalk.tmpl': { expectedSubstr: '__SK_VERSION__', body: SIGNALK_TMPL },
+  '/installer/linux/signalk.tmpl': { expectedSubstr: 'SK_VERSION=', body: SIGNALK_TMPL },
   '/installer/linux/signalk-recovery.tmpl': {
     expectedSubstr: 'signalk-recovery',
     body: RECOVERY_TMPL,
@@ -165,7 +165,7 @@ describe('installer-refresh routes', () => {
     await app.close();
   });
 
-  it('POST /api/installer/refresh writes all artifacts and substitutes __SK_VERSION__', async () => {
+  it('POST /api/installer/refresh writes all artifacts byte-for-byte from Pages', async () => {
     const { app } = await createServer();
     const res = await app.inject({
       method: 'POST',
@@ -178,9 +178,10 @@ describe('installer-refresh routes', () => {
     expect(body.counts['fetch-failed']).toBe(0);
     expect(body.counts['mount-missing']).toBe(0);
 
-    // signalk template substitution actually happened.
+    // signalk template is written byte-for-byte; the version was already
+    // baked in upstream by the Pages deploy workflow.
     const signalkBody = await readFile(join(hostBin, 'signalk'), 'utf8');
-    expect(signalkBody).toContain('SK_VERSION="refreshed-by-doctor"');
+    expect(signalkBody).toBe(SIGNALK_TMPL);
     expect(signalkBody).not.toContain('__SK_VERSION__');
 
     // recovery is byte-for-byte identical (no substitution).

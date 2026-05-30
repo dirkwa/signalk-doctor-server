@@ -29,13 +29,6 @@ function payloadDir(): string {
   return join(doctorData(), 'installer-payload');
 }
 
-// Reported back to the operator and used as the substitution value for the
-// signalk template's __SK_VERSION__ placeholder. "refreshed-by-doctor" is a
-// deliberate sentinel — the doctor doesn't know the upstream installer
-// version, and stamping it lets the operator distinguish a doctor-refreshed
-// signalk command from a freshly-bootstrapped one.
-const REFRESH_VERSION_STAMP = 'refreshed-by-doctor';
-
 // One descriptor per artifact the refresh fetches + writes. Keeping this
 // table-driven means the "what got refreshed" summary the route returns is
 // derived from the same source the writer iterates — they can't drift.
@@ -51,13 +44,6 @@ export interface ArtifactDescriptor {
   /** Octal mode for the write (0o755 for executable scripts, 0o644 for templates). */
   mode: number;
   kind: ArtifactKind;
-  /**
-   * Optional placeholder substitution applied to the fetched body before
-   * writing. Used for signalk.tmpl's __SK_VERSION__ marker. The substitution
-   * is a plain string replace (not a regex) so placeholder syntax doesn't
-   * need any special escaping.
-   */
-  substitute?: { from: string; to: string };
 }
 
 // Built lazily for the same reason hostBinDir() / doctorData() are functions:
@@ -68,12 +54,15 @@ function artifacts(): ArtifactDescriptor[] {
   const pd = payloadDir();
   return [
     {
+      // signalk.tmpl's __SK_VERSION__ placeholder is substituted upstream by
+      // the signalk-universal-installer Pages workflow at deploy time, so
+      // the body we fetch already has the real installer version baked in.
+      // No doctor-side substitution needed.
       id: 'signalk',
       remotePath: 'installer/linux/signalk.tmpl',
       destPath: join(hb, 'signalk'),
       mode: 0o755,
       kind: 'host-script',
-      substitute: { from: '__SK_VERSION__', to: REFRESH_VERSION_STAMP },
     },
     {
       id: 'signalk-recovery',
@@ -210,18 +199,6 @@ async function fetchArtifact(remotePath: string): Promise<Buffer> {
   return Buffer.from(ab);
 }
 
-function applySubstitution(body: Buffer, sub: ArtifactDescriptor['substitute']): Buffer {
-  if (!sub) return body;
-  // Plain string replace via split/join rather than RegExp so the
-  // placeholder syntax doesn't need any escaping. Decoded as UTF-8 to
-  // operate on text, re-encoded back to bytes — these templates are bash
-  // scripts and bash treats them as bytes, but UTF-8 round-trips are safe
-  // for the ASCII placeholder and the surrounding comment text.
-  const text = body.toString('utf8');
-  const out = text.split(sub.from).join(sub.to);
-  return Buffer.from(out, 'utf8');
-}
-
 async function refreshOne(descriptor: ArtifactDescriptor): Promise<ArtifactResult> {
   // Host-script destinations live under hostBinDir(). If that mount is
   // absent the dest's parent dir doesn't exist and the operator's installer
@@ -251,8 +228,7 @@ async function refreshOne(descriptor: ArtifactDescriptor): Promise<ArtifactResul
     };
   }
 
-  const finalBody = applySubstitution(body, descriptor.substitute);
-  const newHash = sha256(finalBody);
+  const newHash = sha256(body);
 
   // Unchanged short-circuit. Avoids unnecessary snapshots when the operator
   // hits "refresh" twice in a row, and keeps the snapshot dir from filling
@@ -266,7 +242,7 @@ async function refreshOne(descriptor: ArtifactDescriptor): Promise<ArtifactResul
 
   const snapshotPath = await snapshotIfExists(descriptor.destPath);
   try {
-    await writeAtomicWithMode(descriptor.destPath, finalBody, descriptor.mode);
+    await writeAtomicWithMode(descriptor.destPath, body, descriptor.mode);
   } catch (err) {
     return {
       id: descriptor.id,
