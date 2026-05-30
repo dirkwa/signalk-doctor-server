@@ -72,6 +72,17 @@ function artifacts(): ArtifactDescriptor[] {
       kind: 'host-script',
     },
     {
+      // Pi CAN-HAT detect-and-advise helper shipped by the
+      // signalk-universal-installer (PR #72). Like signalk-recovery, it
+      // has no __…__ placeholders, so the doctor writes it byte-for-byte
+      // from Pages — no `substitute` field.
+      id: 'signalk-socketcan',
+      remotePath: 'installer/linux/signalk-socketcan.tmpl',
+      destPath: join(hb, 'signalk-socketcan'),
+      mode: 0o755,
+      kind: 'host-script',
+    },
+    {
       id: 'detect-hardware',
       // The detect-hardware script is fetched but not invoked by the doctor —
       // it needs host devices (/dev/serial/by-id, /proc/device-tree/model, the
