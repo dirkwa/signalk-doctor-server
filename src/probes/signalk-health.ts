@@ -33,11 +33,13 @@ async function hop(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   // `dispatcher` is undici's; the global fetch types it via @types/node's
-  // bundled undici-types, a different (older) copy than the `undici`
-  // package we import `Agent` from, so the two Dispatcher identities
-  // don't unify. Derive the init type from fetch itself and cast the
-  // Agent across the seam. Runtime is fine — fastify pulls the same
-  // undici@8, and Node's fetch honours `dispatcher`.
+  // bundled undici-types, a different copy than the `undici` package we
+  // import `Agent` from, so the two Dispatcher identities don't unify.
+  // Derive the init type from fetch itself and cast the Agent across the
+  // seam. The external undici major must match Node's bundled undici
+  // (process.versions.undici), otherwise Node's bundled fetch rejects
+  // the external Agent with `InvalidArgumentError: invalid onRequestStart
+  // method` — Node 24 bundles undici 7.x, so we pin `^7.26.0`.
   type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
   const init: FetchInit = {
     signal: controller.signal,
