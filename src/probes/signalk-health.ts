@@ -39,7 +39,7 @@ async function hop(
   // seam. The external undici major must match Node's bundled undici
   // (process.versions.undici), otherwise Node's bundled fetch rejects
   // the external Agent with `InvalidArgumentError: invalid onRequestStart
-  // method` — Node 24 bundles undici 7.x, so we pin `^7.25.0`.
+  // method` — Node 24 bundles undici 7.x, so we pin `^7.26.0`.
   type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
   const init: FetchInit = {
     signal: controller.signal,
