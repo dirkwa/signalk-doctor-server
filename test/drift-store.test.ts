@@ -62,6 +62,42 @@ describe('drift store', () => {
     expect(loaded?.lastFetchError).toBeNull();
   });
 
+  it('migrates a retired HTTP-era lastFetchError reason forward', async () => {
+    // Before the filesystem-reader swap the scanner wrote HTTP-era reasons
+    // (network, no-token, auth, http, not-found, bad-payload). An existing
+    // drift.json carrying one must still load — and the reason rewrites to a
+    // current value — so a boat mid-outage at upgrade keeps its packages.
+    const oldReport = {
+      signalkImageTag: null,
+      lastScannedAt: '2026-05-24T00:00:00.000Z',
+      lastSuccessfulScanAt: null,
+      online: false,
+      lastFetchError: { reason: 'network', detail: 'ECONNREFUSED' },
+      packages: [],
+    };
+    await writeFile(join(dir, 'drift.json'), JSON.stringify(oldReport, null, 2));
+    const loaded = await loadDriftReport();
+    expect(loaded).not.toBeNull();
+    expect(loaded?.lastFetchError?.reason).toBe('unreachable');
+    expect(loaded?.lastFetchError?.detail).toBe('ECONNREFUSED');
+  });
+
+  it('maps a retired not-found reason to runtime', async () => {
+    const oldReport = {
+      signalkImageTag: null,
+      lastScannedAt: '2026-05-24T00:00:00.000Z',
+      lastSuccessfulScanAt: null,
+      online: false,
+      lastFetchError: { reason: 'not-found', detail: 'HTTP 404' },
+      packages: [],
+    };
+    await writeFile(join(dir, 'drift.json'), JSON.stringify(oldReport, null, 2));
+    const loaded = await loadDriftReport();
+    expect(loaded).not.toBeNull();
+    expect(loaded?.lastFetchError?.reason).toBe('runtime');
+    expect(loaded?.lastFetchError?.detail).toBe('HTTP 404');
+  });
+
   it('refuses to load a report with a malformed lastFetchError reason', async () => {
     // A hand-edited or corrupted file with a reason outside the known
     // set must not leak through — the UI's FETCH_ERROR_GUIDANCE[reason]
