@@ -1,5 +1,5 @@
 import { resolveRuntime, safe } from '../podman/client.js';
-import { fetchDiagnostics, type InstalledPackage } from './diagnostics.js';
+import { readInstalledPackages, type InstalledPackage } from './installed-packages.js';
 import { getLatestVersion, type NpmRegistryResult } from './npm-registry.js';
 import { classify } from './classify.js';
 import { loadDriftReport, saveDriftReport } from './store.js';
@@ -97,14 +97,14 @@ export async function runDriftScan(): Promise<ScanOutcome> {
     prior?.signalkImageTag != null && newImageTag != null && prior.signalkImageTag !== newImageTag;
   const baseReport: DriftReport | null = imageChanged ? null : prior;
 
-  const diagnosticsRes = await fetchDiagnostics();
-  if (!diagnosticsRes.ok) {
+  const installedRes = await readInstalledPackages();
+  if (!installedRes.ok) {
     const report: DriftReport = {
       signalkImageTag: newImageTag,
       lastScannedAt: nowIso,
       lastSuccessfulScanAt: baseReport?.lastSuccessfulScanAt ?? null,
       online: false,
-      lastFetchError: { reason: diagnosticsRes.reason, detail: diagnosticsRes.detail },
+      lastFetchError: { reason: installedRes.reason, detail: installedRes.detail },
       // Keep prior packages array intact when we can't read fresh data.
       packages: baseReport?.packages ?? [],
     };
@@ -112,13 +112,13 @@ export async function runDriftScan(): Promise<ScanOutcome> {
     return {
       report,
       online: false,
-      installedFetchError: `${diagnosticsRes.reason}: ${diagnosticsRes.detail}`,
+      installedFetchError: `${installedRes.reason}: ${installedRes.detail}`,
     };
   }
 
   const packages: DriftPackage[] = [];
   let anyOnline = false;
-  for (const installed of diagnosticsRes.diagnostics.packages) {
+  for (const installed of installedRes.installed.packages) {
     const priorPkg = priorEntry(baseReport, installed.name);
     const registry = await getLatestVersion(installed.name, priorPkg?.etag ?? null);
     if (registry.kind === 'fetched' || registry.kind === 'not-modified') {
