@@ -1,6 +1,6 @@
 {
   "name": "signalk-doctor-server",
-  "version": "0.7.13",
+  "version": "0.7.14",
   "private": true,
   "description": "Peer engine container for SignalK diagnostics and last-known-good recovery",
   "type": "module",
