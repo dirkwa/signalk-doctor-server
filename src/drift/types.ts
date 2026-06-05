@@ -18,18 +18,14 @@ export interface DriftPackage {
   lastFetchedAt: string | null;
 }
 
-/** Diagnostics-fetch failure reason persisted on the report so the
- *  Drift UI can render reason-specific guidance instead of a generic
- *  "offline" badge. Cleared on success. Mirrors DiagnosticsReason
- *  from diagnostics.ts; kept as a separate string union here so the
- *  webapp's type mirror doesn't import scanner internals. */
-export type DriftFetchReason =
-  | 'no-token'
-  | 'auth'
-  | 'network'
-  | 'not-found'
-  | 'http'
-  | 'bad-payload';
+/** Package-read failure reason persisted on the report so the Drift UI
+ *  can render reason-specific guidance instead of a generic "offline"
+ *  badge. Cleared on success. Mirrors InstalledPackagesReason from
+ *  installed-packages.ts; kept as a separate string union here so the
+ *  webapp's type mirror doesn't import scanner internals. Older reports
+ *  may carry retired HTTP-era reasons on disk; store.ts migrates those
+ *  forward on load. */
+export type DriftFetchReason = 'unreachable' | 'runtime';
 
 export interface DriftFetchError {
   reason: DriftFetchReason;

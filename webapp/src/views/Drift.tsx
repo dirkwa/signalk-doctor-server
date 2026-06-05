@@ -19,91 +19,29 @@ const FETCH_ERROR_GUIDANCE: Record<
   DriftFetchError['reason'],
   { label: string; color: string; title: string; body: React.ReactNode }
 > = {
-  'no-token': {
-    label: 'no admin token',
-    color: 'warning',
-    title: 'No signalk-server admin token at /data/signalk-token',
-    body: (
-      <>
-        The doctor's drift scanner needs an admin token to call signalk-server's{' '}
-        <code>/skServer/diagnostics</code> endpoint. The bash installer's step{' '}
-        <code>15b. Doctor admin token</code> writes this file. Re-run the universal installer (or
-        run <code>signalk update</code> on the host) to provision it; if signalk-server's security
-        isn't enabled yet, enable it in the admin UI first.
-      </>
-    ),
-  },
-  auth: {
-    label: '401/403',
-    color: 'danger',
-    title: 'signalk-server rejected the admin token',
-    body: (
-      <>
-        The token at <code>~/.signalk-doctor/signalk-token</code> is invalid or expired. Regenerate
-        it on the host:
-        <pre className="bg-body-tertiary p-2 rounded small mt-2 mb-0">
-          podman exec signalk-server \\
-          <br />
-          /home/node/signalk/node_modules/signalk-server/bin/signalk-generate-token \\
-          <br />
-          -u admin -e 5y -s /home/node/.signalk/security.json \\
-          <br />
-          {'>'} ~/.signalk-doctor/signalk-token
-        </pre>
-      </>
-    ),
-  },
-  network: {
+  unreachable: {
     label: 'unreachable',
     color: 'danger',
-    title: 'signalk-server is unreachable',
+    title: 'Cannot reach the signalk-server container',
     body: (
       <>
-        The doctor couldn't open a TCP connection to signalk-server at all. Check the{' '}
-        <strong>Health</strong> tab's <em>signalk-server</em> probe — if it's red, restart the
-        container from the Updater Console or via{' '}
+        The doctor reads installed versions directly from the running <code>signalk-server</code>{' '}
+        container's filesystem — no API call, no token. It couldn't reach the container runtime at
+        all. Check the <strong>Health</strong> tab's <em>containers</em> and <em>podman</em> probes;
+        if signalk-server is down, restart it from the Updater Console or via{' '}
         <code>systemctl --user restart signalk-server.service</code>.
       </>
     ),
   },
-  'not-found': {
-    label: '404',
-    color: 'warning',
-    title: 'signalk-server doesn’t have /skServer/diagnostics',
-    body: (
-      <>
-        The diagnostics endpoint landed upstream in{' '}
-        <a
-          href="https://github.com/SignalK/signalk-server/pull/2702"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          SignalK PR #2702
-        </a>
-        . The currently-running signalk-server image predates that. Switch to a newer image via the
-        Updater Console's <strong>Versions</strong> tab (the <code>:dirkwa</code> channel already
-        has it).
-      </>
-    ),
-  },
-  http: {
-    label: 'HTTP error',
+  runtime: {
+    label: 'read failed',
     color: 'danger',
-    title: 'signalk-server returned a non-OK status',
-    body: (
-      <>Generic HTTP failure — see the detail line below for the exact code, and the Logs tab.</>
-    ),
-  },
-  'bad-payload': {
-    label: 'malformed',
-    color: 'warning',
-    title: 'signalk-server returned an unexpected response shape',
+    title: 'Could not read package versions from the container',
     body: (
       <>
-        The diagnostics endpoint replied with something other than the expected{' '}
-        <code>{'{ packages: [...] }'}</code> envelope. The Drift feature targets the upstream PR
-        #2702 contract; a custom signalk-server fork that overrides this route would need to match
-        it.
+        The container runtime errored while reading <code>package.json</code> files from
+        signalk-server — see the detail line below. Check the podman socket mount and the{' '}
+        <strong>Health</strong> tab's <em>podman</em> probe.
       </>
     ),
   },
@@ -216,9 +154,9 @@ export function Drift() {
         <CardBody>
           <p>
             Drift between the npm packages baked into the running <code>signalk-server</code> image
-            and the latest versions on the npm registry. The doctor reads installed versions from{' '}
-            <code>signalk-server</code>'s <code>/skServer/diagnostics</code> endpoint, then queries
-            npmjs for each package's latest stable release.
+            and the latest versions on the npm registry. The doctor reads installed versions
+            directly from the running <code>signalk-server</code> container's filesystem, then
+            queries npmjs for each package's latest stable release.
           </p>
           <dl className="row small mb-0">
             <dt className="col-sm-3">SignalK image</dt>
@@ -290,7 +228,7 @@ export function Drift() {
             <p className="text-muted small p-3 mb-0">
               {report.lastFetchError !== null
                 ? 'No package data yet — see the diagnostic alert above for the next step.'
-                : 'No tracked packages reported. The scan completed without an error, but signalk-server returned an empty packages array.'}
+                : 'No tracked packages found. The scan reached the container without error but found none of the tracked packages in the running image.'}
             </p>
           ) : (
             <Table responsive size="sm" className="mb-0">
