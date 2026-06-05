@@ -260,13 +260,7 @@ export interface DriftPackage {
   lastFetchedAt: string | null;
 }
 
-export type DriftFetchReason =
-  | 'no-token'
-  | 'auth'
-  | 'network'
-  | 'not-found'
-  | 'http'
-  | 'bad-payload';
+export type DriftFetchReason = 'unreachable' | 'runtime';
 
 export interface DriftFetchError {
   reason: DriftFetchReason;
