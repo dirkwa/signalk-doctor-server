@@ -1,127 +1,118 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { probeStorageType, baseBlockDevice } from '../src/probes/storage-type.js';
+import { classifyRootDevice, decodeDev } from '../src/probes/storage-type.js';
 
-const ENV_BLOCK = 'HOST_BLOCK';
-const ENV_MOUNTS = 'HOST_MOUNTS';
+const ENV_SYS = 'HOST_SYS';
 const ENV_CGROUP = 'HOST_CGROUP_ROOT';
 
-describe('baseBlockDevice', () => {
-  it('strips the pN partition suffix from mmcblk / nvme', () => {
-    expect(baseBlockDevice('/dev/mmcblk0p2')).toBe('mmcblk0');
-    expect(baseBlockDevice('/dev/nvme0n1p2')).toBe('nvme0n1');
-  });
-
-  it('returns the whole-device name unchanged', () => {
-    expect(baseBlockDevice('/dev/mmcblk0')).toBe('mmcblk0');
-    expect(baseBlockDevice('/dev/nvme0n1')).toBe('nvme0n1');
-  });
-
-  it('strips trailing partition digits from sd/vd/hd', () => {
-    expect(baseBlockDevice('/dev/sda1')).toBe('sda');
-    expect(baseBlockDevice('/dev/sda')).toBe('sda');
-    expect(baseBlockDevice('/dev/vdb3')).toBe('vdb');
-  });
-
-  it('returns null for non-/dev nodes', () => {
-    expect(baseBlockDevice('overlay')).toBeNull();
-    expect(baseBlockDevice('tmpfs')).toBeNull();
+describe('decodeDev', () => {
+  it('decodes the glibc-encoded device number into major:minor', () => {
+    // 0x802 = sda2 (8:2); 0xb02 = mmcblk0p2 region (179:2); 0x10302 = nvme (259:2).
+    expect(decodeDev(0x802)).toEqual({ maj: 8, min: 2 });
+    expect(decodeDev(0xb302)).toEqual({ maj: 179, min: 2 });
   });
 });
 
-describe('storage-type probe', () => {
+describe('storage-type probe (classifyRootDevice)', () => {
   let dir: string;
-  const prevBlock = process.env[ENV_BLOCK];
-  const prevMounts = process.env[ENV_MOUNTS];
-  const prevCgroup = process.env[ENV_CGROUP];
+  const prev: Record<string, string | undefined> = {};
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'storage-probe-'));
-    process.env[ENV_BLOCK] = join(dir, 'block');
-    process.env[ENV_MOUNTS] = join(dir, 'mounts');
+    for (const k of [ENV_SYS, ENV_CGROUP]) prev[k] = process.env[k];
+    process.env[ENV_SYS] = join(dir, 'sys');
     process.env[ENV_CGROUP] = join(dir, 'cgroup');
     await mkdir(join(dir, 'cgroup'), { recursive: true });
   });
 
   afterEach(async () => {
-    const restore = (k: string, v: string | undefined): void => {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    };
-    restore(ENV_BLOCK, prevBlock);
-    restore(ENV_MOUNTS, prevMounts);
-    restore(ENV_CGROUP, prevCgroup);
+    for (const k of [ENV_SYS, ENV_CGROUP]) {
+      if (prev[k] === undefined) delete process.env[k];
+      else process.env[k] = prev[k];
+    }
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function writeMounts(...lines: string[]): Promise<void> {
-    await writeFile(join(dir, 'mounts'), lines.join('\n') + '\n');
+  // Build a fake /host/sys where device `maj:min` is a partition (or the whole
+  // disk) on `device`, with the disk dir carrying queue/rotational. Mirrors the
+  // real sysfs layout the probe walks: /sys/dev/block/<maj:min> is a relative
+  // symlink into .../devices/.../block/DISK[/PART].
+  async function fakeSys(opts: {
+    maj: number;
+    min: number;
+    device: string;
+    rotational: string;
+    partition?: boolean;
+  }): Promise<void> {
+    const sys = join(dir, 'sys');
+    const diskRel = `../../devices/virtual/block/${opts.device}`;
+    const diskAbs = join(sys, 'devices/virtual/block', opts.device);
+    await mkdir(join(diskAbs, 'queue'), { recursive: true });
+    await writeFile(join(diskAbs, 'queue', 'rotational'), opts.rotational + '\n');
+    await mkdir(join(sys, 'dev/block'), { recursive: true });
+    const linkName = join(sys, 'dev/block', `${opts.maj}:${opts.min}`);
+    if (opts.partition === false) {
+      await symlink(diskRel, linkName);
+    } else {
+      const part = `${opts.device}p2`;
+      await mkdir(join(diskAbs, part), { recursive: true });
+      await symlink(`${diskRel}/${part}`, linkName);
+    }
   }
-  async function writeRotational(base: string, value: string): Promise<void> {
-    const qdir = join(dir, 'block', base, 'queue');
-    await mkdir(qdir, { recursive: true });
-    await writeFile(join(qdir, 'rotational'), value + '\n');
-  }
-  async function writeIoPressure(some: string): Promise<void> {
+
+  async function fakeIoPressure(someAvg10: string): Promise<void> {
     await writeFile(
       join(dir, 'cgroup', 'io.pressure'),
-      `some avg10=${some} avg60=0.00 avg300=0.00 total=0\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=0\n`,
+      `some avg10=${someAvg10} avg60=0 avg300=0 total=0\nfull avg10=0 avg60=0 avg300=0 total=0\n`,
     );
   }
 
-  it("returns 'unknown' when the host mounts file is missing", async () => {
-    const r = await probeStorageType();
-    expect(r.id).toBe('storage-type');
-    expect(r.status).toBe('unknown');
-    expect(r.message).toMatch(/missing the host mounts/);
-  });
-
-  it("flags an SD-card root as 'warn' with the SSD advice", async () => {
-    await writeMounts(
-      'proc /proc proc rw 0 0',
-      '/dev/mmcblk0p2 / ext4 rw,relatime 0 0',
-      '/dev/mmcblk0p1 /boot/firmware vfat rw 0 0',
-    );
-    await writeRotational('mmcblk0', '0');
-    await writeIoPressure('4.20');
-    const r = await probeStorageType();
+  it("flags an mmcblk root as 'warn' with the SSD advice and PSI note", async () => {
+    await fakeSys({ maj: 179, min: 2, device: 'mmcblk0', rotational: '0' });
+    await fakeIoPressure('4.20');
+    const r = await classifyRootDevice(179, 2);
     expect(r.status).toBe('warn');
     expect(r.message).toMatch(/SD card \(mmcblk0\)/);
     expect(r.message).toMatch(/SSD/);
     expect(r.message).toContain('avg10=4.2%');
-    expect(r.details).toMatchObject({ device: 'mmcblk0', kind: 'sd-card' });
+    expect(r.details).toMatchObject({ device: 'mmcblk0', kind: 'sd-card', rotational: 0 });
   });
 
   it("reports an NVMe root as 'ok'", async () => {
-    await writeMounts('/dev/nvme0n1p2 / ext4 rw 0 0');
-    await writeRotational('nvme0n1', '0');
-    const r = await probeStorageType();
+    await fakeSys({ maj: 259, min: 2, device: 'nvme0n1', rotational: '0' });
+    const r = await classifyRootDevice(259, 2);
     expect(r.status).toBe('ok');
     expect(r.details).toMatchObject({ device: 'nvme0n1', kind: 'ssd' });
   });
 
   it("reports a non-rotational sd device as an SSD ('ok')", async () => {
-    await writeMounts('/dev/sda1 / ext4 rw 0 0');
-    await writeRotational('sda', '0');
-    const r = await probeStorageType();
+    await fakeSys({ maj: 8, min: 2, device: 'sda', rotational: '0' });
+    const r = await classifyRootDevice(8, 2);
     expect(r.status).toBe('ok');
     expect(r.details).toMatchObject({ device: 'sda', kind: 'ssd' });
   });
 
   it("reports a rotational sd device as an HDD ('ok', not the SD problem)", async () => {
-    await writeMounts('/dev/sda1 / ext4 rw 0 0');
-    await writeRotational('sda', '1');
-    const r = await probeStorageType();
+    await fakeSys({ maj: 8, min: 2, device: 'sda', rotational: '1' });
+    const r = await classifyRootDevice(8, 2);
     expect(r.status).toBe('ok');
+    expect(r.message).toMatch(/spinning disk/);
     expect(r.details).toMatchObject({ device: 'sda', kind: 'hdd' });
   });
 
-  it("returns 'unknown' when there is no root mount", async () => {
-    await writeMounts('proc /proc proc rw 0 0', 'tmpfs /run tmpfs rw 0 0');
-    const r = await probeStorageType();
+  it('resolves a whole-disk root (no partition) via the disk own queue/', async () => {
+    await fakeSys({ maj: 8, min: 0, device: 'sda', rotational: '1', partition: false });
+    const r = await classifyRootDevice(8, 0);
+    expect(r.status).toBe('ok');
+    expect(r.details).toMatchObject({ device: 'sda' });
+  });
+
+  it("returns 'unknown' when /host/sys can't resolve the device (older quadlet)", async () => {
+    // No fakeSys() — /host/sys/dev/block/<maj:min> doesn't exist.
+    const r = await classifyRootDevice(8, 2);
     expect(r.status).toBe('unknown');
-    expect(r.message).toMatch(/no root \(\/\) mount/);
+    expect(r.message).toMatch(/could not resolve the root block device/);
   });
 });
