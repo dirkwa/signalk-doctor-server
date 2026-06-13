@@ -5,6 +5,10 @@ import { signalkHttpUrl, signalkHttpsUrl } from './signalk-url.js';
 const ID = 'signalk-health';
 const LABEL = 'SignalK server HTTP health';
 const TIMEOUT_MS = 5000;
+// Reachable but slower than this ⇒ warn "likely disk I/O" rather than a bare
+// ok. Mirrors updater-health.ts SLOW_MS. signalk-server runs Network=host so
+// this is the fast path with the most headroom; it still flags I/O stalls.
+const SLOW_MS = 1500;
 
 // signalk-server, with SSL on, serves HTTPS on `sslport` using a
 // self-signed leaf (the local CA minted by signalk-ssl). The doctor's
@@ -16,7 +20,20 @@ const TIMEOUT_MS = 5000;
 const insecureTls = new Agent({ connect: { rejectUnauthorized: false } });
 
 function ok(message: string, t0: number): ProbeResult {
-  return { id: ID, label: LABEL, status: 'ok', message, durationMs: Date.now() - t0 };
+  const durationMs = Date.now() - t0;
+  // A reachable-but-slow signalk-server is the same I/O-contention signal the
+  // updater-health and storage-type probes surface — downgrade to warn so it
+  // doesn't read as a clean bill of health.
+  if (durationMs > SLOW_MS) {
+    return {
+      id: ID,
+      label: LABEL,
+      status: 'warn',
+      message: `${message} — slow (${durationMs}ms); likely host I/O contention, see the Host root storage probe`,
+      durationMs,
+    };
+  }
+  return { id: ID, label: LABEL, status: 'ok', message, durationMs };
 }
 function fail(message: string, t0: number): ProbeResult {
   return { id: ID, label: LABEL, status: 'fail', message, durationMs: Date.now() - t0 };

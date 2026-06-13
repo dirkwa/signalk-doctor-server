@@ -10,6 +10,7 @@ import { probeTimeDrift } from './time-drift.js';
 import { probeSnapshots } from './snapshots.js';
 import { probeVersionDrift } from './version-drift.js';
 import { probeCgroupDelegation } from './cgroup-delegation.js';
+import { probeStorageType } from './storage-type.js';
 
 const PROBES = [
   probePodman,
@@ -24,6 +25,7 @@ const PROBES = [
   probeMemory,
   probeTimeDrift,
   probeCgroupDelegation,
+  probeStorageType,
 ];
 
 export async function runAllProbes(): Promise<{
