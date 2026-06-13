@@ -9,7 +9,7 @@ const ENV_CGROUP = 'HOST_CGROUP_ROOT';
 
 describe('decodeDev', () => {
   it('decodes the glibc-encoded device number into major:minor', () => {
-    // 0x802 = sda2 (8:2); 0xb02 = mmcblk0p2 region (179:2); 0x10302 = nvme (259:2).
+    // 0x802 = sda2 (8:2); 0xb302 = mmcblk0p2 (179:2).
     expect(decodeDev(0x802)).toEqual({ maj: 8, min: 2 });
     expect(decodeDev(0xb302)).toEqual({ maj: 179, min: 2 });
   });
