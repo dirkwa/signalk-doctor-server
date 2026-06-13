@@ -121,8 +121,9 @@ reviews:
           at boundaries (HTTP request bodies, child-process stdout,
           dockerode responses).
         - Node `>= 24` per `engines`. Native fetch is fine. Codebase
-          convention: named imports from `fs/promises`. Don't suggest
-          the `node:` prefix — the project deliberately doesn't use it.
+          convention: built-in modules are imported WITH the `node:`
+          prefix (`node:fs/promises`, `node:path`, etc.), uniformly
+          across `src/`. Don't suggest removing it.
 
         ## Shell-out conventions
 
