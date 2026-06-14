@@ -6,10 +6,9 @@
     by the Signal K project and its appstore without further attribution.
 
     Design notes:
-      - Rounded green-teal body, white corners. The icon sits in the
-        admin-UI tile against a SignalK-blue (#003399) background;
-        the four corners outside the rx=20 rounded shape are white
-        so they blend with the surrounding card, not the tile.
+      - Rounded green-teal body, transparent corners. The four corners
+        outside the rx=20 rounded shape are transparent so the icon
+        sits cleanly on any background.
       - Sea-green / teal gradient = "healthy water" palette, pairs
         visually with but doesn't collide with the blue updater icon.
       - Heart-pulse / EKG trace = diagnostic intent.
@@ -24,9 +23,6 @@
       <rect x="0" y="0" width="128" height="128" rx="20"/>
     </clipPath>
   </defs>
-
-  <!-- White corners. -->
-  <rect width="128" height="128" fill="#ffffff"/>
 
   <!-- Rounded gradient body with glyph clipped inside. -->
   <g clip-path="url(#rounded)">
