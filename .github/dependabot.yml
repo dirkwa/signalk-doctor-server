@@ -16,6 +16,15 @@ updates:
       # Allow updates within the v22.x line; ignore v23+.
       - dependency-name: '@types/node'
         versions: ['>=23']
+      # undici must match the major that Node bundles into global fetch.
+      # signalk-health.ts hands an external undici Agent to global fetch as
+      # a dispatcher; a major mismatch makes Node reject it at runtime with
+      # `InvalidArgumentError: invalid onRequestStart method` (CI stays green
+      # — the SSL fallback hop isn't exercised). Node 24 bundles undici 7.x,
+      # so ignore v8+ until the bundled major moves.
+      - dependency-name: 'undici'
+        update-types:
+          - version-update:semver-major
 
   - package-ecosystem: github-actions
     directory: '/'
