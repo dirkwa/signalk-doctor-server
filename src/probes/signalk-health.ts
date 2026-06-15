@@ -8,7 +8,9 @@ const TIMEOUT_MS = 5000;
 // Reachable but slower than this ⇒ warn "likely disk I/O" rather than a bare
 // ok. Mirrors updater-health.ts SLOW_MS. signalk-server runs Network=host so
 // this is the fast path with the most headroom; it still flags I/O stalls.
-const SLOW_MS = 1500;
+// Raised to 4s so a busy-but-functional box isn't flagged on every run while
+// the warn band (4s–TIMEOUT_MS) still catches a genuinely wedged server.
+const SLOW_MS = 4000;
 
 // signalk-server, with SSL on, serves HTTPS on `sslport` using a
 // self-signed leaf (the local CA minted by signalk-ssl). The doctor's
