@@ -7,8 +7,11 @@ describe('categorizeError', () => {
       'getaddrinfo ENOTFOUND ghcr.io',
       'connect ECONNREFUSED 140.82.0.1:443',
       'connect ETIMEDOUT',
+      'connect EHOSTUNREACH 140.82.0.1:443',
       'read ECONNRESET',
       'getaddrinfo EAI_AGAIN ghcr.io',
+      'UND_ERR_SOCKET: other side closed',
+      'no route to host',
       'network is unreachable',
     ]) {
       expect(categorizeError(new Error(raw)).kind).toBe('network');

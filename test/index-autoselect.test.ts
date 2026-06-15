@@ -37,8 +37,11 @@ describe('src/index.ts Happy-Eyeballs attempt-timeout fix', () => {
     const src = await readFile(INDEX_TS, 'utf8');
     // The default fallback (|| N) must be >= 5000.
     const m = src.match(/\|\|\s*(\d+)/);
-    expect(m).not.toBeNull();
-    expect(Number(m?.[1])).toBeGreaterThanOrEqual(5000);
+    const fallback = m?.[1];
+    expect(fallback).toBeDefined();
+    // Narrow against undefined (noUncheckedIndexedAccess) before Number().
+    if (fallback === undefined) throw new Error('no fallback literal found');
+    expect(Number(fallback)).toBeGreaterThanOrEqual(5000);
   });
 
   it('floors the value so a misconfigured small/zero env cannot re-introduce the fast-fail', async () => {
