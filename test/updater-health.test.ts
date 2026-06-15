@@ -51,19 +51,20 @@ describe('probeUpdaterHealth', () => {
   });
 
   it("downgrades a slow-but-healthy response to 'warn' with the I/O hint", async () => {
-    // Make the per-attempt clock jump past SLOW_MS (1500) without real waiting.
+    // Make the per-attempt clock jump past SLOW_MS (4000), into the warn band
+    // below TIMEOUT_MS (5000), without real waiting.
     // Probe call order: t0, attemptStart, attemptMs-end, totalMs-end.
     const base = 1_000_000;
     const nowSpy = vi
       .spyOn(Date, 'now')
       .mockReturnValueOnce(base) // t0
       .mockReturnValueOnce(base) // attemptStart
-      .mockReturnValue(base + 3000); // attempt end + total end
+      .mockReturnValue(base + 4500); // attempt end + total end
     try {
       fetchSpy.mockResolvedValueOnce(jsonRes({ ok: true, runtime: 'podman' }));
       const r = await probeUpdaterHealth();
       expect(r.status).toBe('warn');
-      expect(r.message).toMatch(/slow \(3000ms\)/);
+      expect(r.message).toMatch(/slow \(4500ms\)/);
       expect(r.message).toMatch(/Host root storage/);
     } finally {
       nowSpy.mockRestore();

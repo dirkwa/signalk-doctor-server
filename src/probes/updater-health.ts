@@ -9,9 +9,12 @@ const UPDATER_URL = process.env.UPDATER_URL ?? 'http://host.containers.internal:
 // by a longer timeout.
 const TIMEOUT_MS = 5000;
 // Reachable but slower than this ⇒ warn "likely disk I/O". Observed healthy is
-// ~12ms; an SD-card-starved doctor answered in 2700–3800ms. 1.5s sits well
-// above healthy and below the abort. Mirrors signalk-health.ts SLOW_MS.
-const SLOW_MS = 1500;
+// ~12ms; an SD-card-starved doctor answered in 2700–3800ms. Raised to 4s so a
+// busy-but-functional box (a localhost call that lands in the low seconds) is
+// not flagged on every run; the warn band (4s–TIMEOUT_MS) still catches a
+// genuinely wedged server before the abort fails it. Mirrors
+// signalk-health.ts SLOW_MS.
+const SLOW_MS = 4000;
 // Bounded retry so a single slow/missed answer (the doctor↔updater pasta
 // sibling path has the least headroom and is first to stall under load)
 // doesn't flap the probe to fail. Shorter than the installer's 180s startup
