@@ -1,4 +1,11 @@
-export type ErrorKind = 'network' | 'auth' | 'disk' | 'permission' | 'not-found' | 'unknown';
+export type ErrorKind =
+  | 'network'
+  | 'registry-unavailable'
+  | 'auth'
+  | 'disk'
+  | 'permission'
+  | 'not-found'
+  | 'unknown';
 
 export interface CategorizedError {
   kind: ErrorKind;
@@ -11,8 +18,24 @@ const NET_PATTERNS = [
   /ECONNREFUSED/,
   /EHOSTUNREACH/,
   /ETIMEDOUT/,
+  /ECONNRESET/,
+  /EAI_AGAIN/,
+  /UND_ERR/, // undici fetch failures (e.g. "fetch failed" socket errors)
   /no route to host/i,
   /network is unreachable/i,
+];
+
+// A registry/upstream returning a 5xx (or 429) is transient — momentarily
+// unavailable or throttling, not a misconfiguration. Surfaced as a distinct,
+// retryable kind so the UI can say "try again" instead of treating it like a
+// hard failure. The `HTTP 5xx` strings come from ghcr.ts's throws on a
+// non-ok upstream response.
+const REGISTRY_UNAVAILABLE_PATTERNS = [
+  /HTTP 5\d\d/,
+  /HTTP 429/,
+  /\bfetch failed\b/i,
+  /503 Service Unavailable/i,
+  /502 Bad Gateway/i,
 ];
 
 const AUTH_PATTERNS = [/unauthorized/i, /authentication required/i, /denied: requested access/i];
@@ -29,12 +52,21 @@ export function categorizeError(err: unknown): CategorizedError {
   if (NET_PATTERNS.some((p) => p.test(raw))) {
     return {
       kind: 'network',
-      userMessage: 'Network error. Check connectivity to the registry.',
+      userMessage: 'Could not reach the registry. Check connectivity and try again.',
       raw,
     };
   }
+  // Auth is checked before registry-unavailable so a 401/403 stays 'auth'.
+  // (The 5xx/429 pattern can't match those, but keep the order explicit.)
   if (AUTH_PATTERNS.some((p) => p.test(raw))) {
     return { kind: 'auth', userMessage: 'Registry authentication failed.', raw };
+  }
+  if (REGISTRY_UNAVAILABLE_PATTERNS.some((p) => p.test(raw))) {
+    return {
+      kind: 'registry-unavailable',
+      userMessage: 'The registry is temporarily unavailable. Try again in a moment.',
+      raw,
+    };
   }
   if (DISK_PATTERNS.some((p) => p.test(raw))) {
     return { kind: 'disk', userMessage: 'Disk full. Free space and retry.', raw };
