@@ -47,12 +47,45 @@ async function detectKind(client: Docker, socketPath: string): Promise<RuntimeKi
   }
 }
 
-export async function resolveRuntime(): Promise<ResolvedRuntime | null> {
+// Module-scope cache for the resolved runtime. Runtime kind + socket path
+// are immutable for the life of this process, and detectKind() does
+// `client.version()` — which on podman shells out `dpkg-query --search` per
+// helper binary (netavark, aardvark-dns, slirp4netns, crun, pasta, conmon)
+// to report provenance. The doctor's probe runner fires many probes
+// concurrently, each resolving the runtime, so re-detecting every time
+// becomes a dpkg-query fan-out storm that pegs slow Pi-class boxes (observed
+// at load 188). Cache the result; memoize the in-FLIGHT promise (not just
+// the value) so a concurrent burst — the exact storm condition — collapses
+// to a single version() instead of a cache stampede.
+let cachedRuntime: ResolvedRuntime | null = null;
+let inFlight: Promise<ResolvedRuntime | null> | null = null;
+
+async function detectRuntimeOnce(): Promise<ResolvedRuntime | null> {
   const socketPath = await pickSocket();
   if (!socketPath) return null;
   const client = new Docker({ socketPath });
   const kind = await detectKind(client, socketPath);
   return { client, socketPath, kind };
+}
+
+export async function resolveRuntime(): Promise<ResolvedRuntime | null> {
+  if (cachedRuntime) return cachedRuntime;
+  if (!inFlight) {
+    inFlight = detectRuntimeOnce();
+  }
+  const resolved = await inFlight;
+  if (resolved) {
+    cachedRuntime = resolved;
+  }
+  inFlight = null;
+  return resolved;
+}
+
+/** Test-only: drop the memoized runtime so the next resolveRuntime()
+ *  re-detects. */
+export function __resetRuntimeCacheForTests(): void {
+  cachedRuntime = null;
+  inFlight = null;
 }
 
 export async function safe<T>(
