@@ -144,7 +144,7 @@ export type BugReportResult =
       durationMs: number;
     };
 
-interface SpawnLogger {
+export interface SpawnLogger {
   info(obj: object, msg?: string): void;
   warn(obj: object, msg?: string): void;
 }

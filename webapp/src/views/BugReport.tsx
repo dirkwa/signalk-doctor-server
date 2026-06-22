@@ -26,6 +26,7 @@ export function BugReport() {
   const [report, setReport] = useState<GeneratedReport | null>(null);
   const [generateBusy, setGenerateBusy] = useState(false);
   const [generateErr, setGenerateErr] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
 
   const [filebinUrl, setFilebinUrl] = useState<string | null>(null);
   const [uploadBusy, setUploadBusy] = useState(false);
@@ -36,8 +37,9 @@ export function BugReport() {
     setGenerateErr(null);
     setFilebinUrl(null);
     setUploadErr(null);
+    setElapsed(0);
     try {
-      const r = await downloadBugReport();
+      const r = await downloadBugReport((s) => setElapsed(s));
       setReport({
         blob: r.blob,
         filename: r.filename,
@@ -127,7 +129,13 @@ export function BugReport() {
               </p>
               <Button color="primary" disabled={generateBusy} onClick={() => void runGenerate()}>
                 {generateBusy && <Spinner size="sm" className="me-2" />}
-                {generateBusy ? 'Generating…' : report !== null ? 'Regenerate' : 'Generate bundle'}
+                {generateBusy
+                  ? elapsed > 0
+                    ? `Collecting… ${elapsed}s`
+                    : 'Collecting…'
+                  : report !== null
+                    ? 'Regenerate'
+                    : 'Generate bundle'}
               </Button>
               {generateErr !== null && (
                 <Alert color="danger" className="mt-2 mb-0">
