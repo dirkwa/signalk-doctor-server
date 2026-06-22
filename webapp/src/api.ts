@@ -295,21 +295,94 @@ export interface BugReportSuccess {
   blob: Blob;
 }
 
-/** POST /api/bug-report and return the tarball as a Blob plus metadata
- *  read from response headers. The doctor sets x-bug-report-filename
- *  and x-bug-report-duration-ms so the webapp can show "took 47s, 3.2 MB"
- *  without parsing the binary body. */
-export async function downloadBugReport(): Promise<BugReportSuccess> {
-  // Don't reuse request<T> — it text()-parses the body and would
-  // corrupt a binary tarball. Mirror its auth+header logic instead.
-  const init: RequestInit = { method: 'POST', headers: buildHeaders({ method: 'POST' }) };
-  const res = await fetch(`${API_BASE}/bug-report`, init);
+interface BugReportStartResponse {
+  jobId: string;
+  status: 'running';
+  startedAt: string;
+  reused?: boolean;
+}
+
+type BugReportJobResponse =
+  | { status: 'running'; startedAt: string }
+  | {
+      status: 'done';
+      startedAt: string;
+      finishedAt: string;
+      filename: string;
+      sizeBytes: number;
+      durationMs: number;
+    }
+  | {
+      status: 'error';
+      startedAt: string;
+      finishedAt: string;
+      reason: string;
+      detail: string;
+      stderr?: string;
+      exitCode?: number;
+      durationMs: number;
+    };
+
+const POLL_INTERVAL_MS = 2000;
+// Hard ceiling on how long we'll poll a single job. The engine caps the
+// host collector at 10 minutes (BUG_REPORT_TIMEOUT_MS); give a little
+// slack so a job that times out engine-side surfaces its own 'error'
+// before we bail with this client-side guard.
+const POLL_TIMEOUT_MS = 11 * 60 * 1000;
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Run the full async bug-report flow and return the tarball as a Blob
+ *  plus metadata. Three hops so the signalk-doctor plugin proxy's 15s
+ *  header watchdog never trips (a synchronous collector blocks past it
+ *  on a cold boat → "HTTP 502" every time):
+ *
+ *    1. POST /api/bug-report           → 202 { jobId } (headers in <1s)
+ *    2. GET  /api/bug-report/:jobId     → poll until status !== 'running'
+ *    3. GET  /api/bug-report/:jobId/download → stream the tarball
+ *
+ *  `onProgress` fires once per poll with the seconds elapsed so the view
+ *  can show a live "collecting… 42s" counter instead of a dead spinner. */
+export async function downloadBugReport(
+  onProgress?: (elapsedSeconds: number) => void,
+): Promise<BugReportSuccess> {
+  // 1. Start the job (mutating → bearer attached by buildHeaders).
+  const started = await request<BugReportStartResponse>('/bug-report', { method: 'POST' });
+  const jobId = started.jobId;
+
+  // 2. Poll until the job leaves 'running'. Read-only GET, no bearer.
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    const job = await request<BugReportJobResponse>(`/bug-report/${encodeURIComponent(jobId)}`);
+    if (job.status === 'done') {
+      return downloadReadyTarball(jobId);
+    }
+    if (job.status === 'error') {
+      const err: ApiError = new Error(job.detail || `bug-report failed (${job.reason})`);
+      err.status = 500;
+      err.body = job;
+      throw err;
+    }
+    onProgress?.(Math.round((Date.now() - new Date(started.startedAt).getTime()) / 1000));
+    await sleep(POLL_INTERVAL_MS);
+  }
+  const err: ApiError = new Error(
+    'bug-report did not finish in time — the tarball may still land under ' +
+      '~/.signalk-doctor/bug-reports/ on the host; retrieve it via SSH.',
+  );
+  err.status = 504;
+  throw err;
+}
+
+/** Step 3 of downloadBugReport: fetch the finished tarball as a Blob.
+ *  Separate from request<T> because that text()-parses the body and would
+ *  corrupt the binary gzip. Read-only GET — no bearer (the random jobId is
+ *  the capability). */
+async function downloadReadyTarball(jobId: string): Promise<BugReportSuccess> {
+  const res = await fetch(`${API_BASE}/bug-report/${encodeURIComponent(jobId)}/download`, {
+    headers: buildHeaders({}),
+  });
   if (!res.ok) {
-    // Error responses come back as JSON: { error, reason, ... }.
-    // Read as text first so we can fall back gracefully on parse
-    // failure — calling res.json() then res.text() doesn't work
-    // because the body stream is consumed on the first read. Same
-    // pattern as request<T> above.
     const text = await res.text();
     let body: unknown = null;
     if (text) {
