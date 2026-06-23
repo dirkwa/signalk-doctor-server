@@ -196,9 +196,45 @@ async function readPackageVersion(probe: ContainerProbe, name: string): Promise<
     // ancestor-walk miss, so keep walking. Any other categorized error is a
     // real runtime failure we must not mistake for "absent".
     if (res.error.kind === 'not-found') continue;
-    return { kind: 'error', detail: `${res.error.kind}: ${res.error.userMessage}` };
+    return { kind: 'error', detail: describeReadError(res.error) };
   }
   return { kind: 'absent' };
+}
+
+/** The signature podman/crun emits when the rootless API service is in a
+ *  DIFFERENT user namespace than the container it's asked to read from: it
+ *  cannot open the container's mount namespace. This is not a real
+ *  socket/mount-permission problem — it's a stale podman service namespace,
+ *  fixed by restarting the service so it rejoins the containers' pause
+ *  namespace. We detect it from the raw error so the operator gets the actual
+ *  remedy instead of the generic "check socket and mount permissions" (which
+ *  sends them chasing the wrong thing — the socket is fine, a shell
+ *  `podman exec` on the same file works). */
+function isStaleApiNamespaceError(raw: string): boolean {
+  return /\/proc\/\d+\/ns\/mnt/i.test(raw) && /permission denied/i.test(raw);
+}
+
+/** Build the operator-facing detail for a failed container read. For the
+ *  stale-namespace case, replace the misleading generic message with the
+ *  precise remedy; otherwise surface kind + userMessage plus the raw error
+ *  (truncated) so a field report names the actual failure. */
+function describeReadError(error: CategorizedError): string {
+  if (error.kind === 'permission' && isStaleApiNamespaceError(error.raw)) {
+    return (
+      'permission: the podman API service is in a stale user namespace and ' +
+      "cannot read signalk-server's files (a shell `podman exec` still works). " +
+      'Fix: `systemctl --user restart podman.service`, then restart this ' +
+      'container. Re-running the installer also repairs it.'
+    );
+  }
+  return `${error.kind}: ${error.userMessage} (${truncateRaw(error.raw)})`;
+}
+
+/** Trim a raw error message to a sane length for the operator-facing detail
+ *  and collapse whitespace so a multi-line stderr stays one tidy line. */
+function truncateRaw(raw: string): string {
+  const oneLine = raw.replace(/\s+/g, ' ').trim();
+  return oneLine.length > 200 ? `${oneLine.slice(0, 197)}…` : oneLine;
 }
 
 /**
@@ -233,7 +269,7 @@ export async function readInstalledPackages(
     return {
       ok: false,
       reason: 'runtime',
-      detail: `${reachable.error.kind}: cannot reach ${TARGET_CONTAINER} (${reachable.error.userMessage})`,
+      detail: `${reachable.error.kind}: cannot reach ${TARGET_CONTAINER} (${reachable.error.userMessage}) (${truncateRaw(reachable.error.raw)})`,
     };
   }
 

@@ -252,6 +252,51 @@ describe('readInstalledPackages', () => {
     expect(res.reason).toBe('runtime');
   });
 
+  it('surfaces the stale-podman-namespace remedy for an ns/mnt permission error', async () => {
+    // The signature when the rootless podman API service is in a different
+    // user namespace than signalk-server: it can't open the container's mount
+    // namespace. probe()/inspect still succeeds (metadata only), so this only
+    // shows up on the file read. The detail must name the real fix (restart
+    // podman.service), NOT the misleading generic "check socket and mount
+    // permissions" — the socket is fine.
+    const nsErr: CategorizedError = {
+      kind: 'permission',
+      userMessage: 'Permission denied. Check container socket and mount permissions.',
+      raw: '(HTTP code 500) server error - open /proc/3648382/ns/mnt: permission denied',
+    };
+    const probe: ContainerProbe = {
+      probe: () => Promise.resolve({ ok: true, value: Buffer.alloc(0) }),
+      fetch: () => Promise.resolve({ ok: false, error: nsErr }),
+    };
+    const res = await readInstalledPackages(probe);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.reason).toBe('runtime');
+    expect(res.detail).toMatch(/restart podman\.service/);
+    expect(res.detail).toMatch(/stale user namespace/);
+    // The generic mount-permissions wording must NOT be what the operator sees.
+    expect(res.detail).not.toMatch(/check container socket and mount permissions/i);
+  });
+
+  it('surfaces kind + raw for a non-namespace permission error (no false remedy)', async () => {
+    // A genuine socket-permission EACCES must NOT claim the namespace remedy.
+    const permErr: CategorizedError = {
+      kind: 'permission',
+      userMessage: 'Permission denied. Check container socket and mount permissions.',
+      raw: 'EACCES: permission denied, open /var/run/docker.sock',
+    };
+    const probe: ContainerProbe = {
+      probe: () => Promise.resolve({ ok: true, value: Buffer.alloc(0) }),
+      fetch: () => Promise.resolve({ ok: false, error: permErr }),
+    };
+    const res = await readInstalledPackages(probe);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.detail).not.toMatch(/restart podman\.service/);
+    // But the raw IS surfaced so a field report is still conclusive.
+    expect(res.detail).toMatch(/docker\.sock/);
+  });
+
   it('returns unreachable when there is no container runtime', async () => {
     // No probe injected and (on CI runners) no podman socket → resolveRuntime
     // returns null. On a dev host with a socket this would instead reach the
