@@ -1,0 +1,79 @@
+name: Security Scan
+
+# Trivy CVE scan of the container image.
+#
+# Builds the amd64 image from the current Dockerfile and scans it for known
+# vulnerabilities in two layers:
+#   - npm packages baked into node_modules (the build/deps stages)
+#   - the node:24-trixie-slim base + the apt packages the runtime stage
+#     installs (tini, ca-certificates, systemd, dbus)
+# A newly-disclosed CVE in the base or those packages surfaces here even when
+# no code changed — coverage neither `npm audit` nor Dependabot provides.
+#
+# Runs weekly (not on PRs) so freshly-disclosed CVEs surface without adding an
+# image build to every PR. Results land in the Security → Code scanning tab.
+#
+# Tuned to report only ACTIONABLE findings:
+#   - ignore-unfixed: drop CVEs with no fixed version (e.g. kernel headers) —
+#     they are noise we cannot resolve here.
+#   - severity HIGH,CRITICAL: skip the low/medium OS-package churn.
+# This is informational; it does not gate anything.
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+# A manual dispatch can overlap the weekly run; both upload the same
+# trivy-docker SARIF category, so cancel an older in-progress scan.
+concurrency:
+  group: security-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  security-scan:
+    if: github.repository == 'dirkwa/signalk-doctor-server'
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+        with:
+          # No later step performs git operations — don't leave the token
+          # in the workspace.
+          persist-credentials: false
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image (amd64, no push)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: signalk-doctor-server:scan
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: 'signalk-doctor-server:scan'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          ignore-unfixed: true
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Trivy scan results to GitHub Security tab
+        # always() so a scan that finds CVEs (non-zero) still uploads, but
+        # guard on the file existing so a build/scan failure surfaces its own
+        # error instead of failing here on a missing SARIF.
+        if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: 'trivy-results.sarif'
+          category: 'trivy-docker'
