@@ -47,7 +47,16 @@ ENV NODE_ENV=production \
 # dbus    — libdbus client libs that busctl links against.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends tini ca-certificates systemd dbus \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ # Drop the npm that node:24-trixie-slim bundles. The runtime entrypoint is
+ # `node dist/index.js`; nothing in this container ever invokes npm (it talks
+ # to the host bus via busctl and to podman via dockerode, never npm). npm is
+ # only used in the build/deps stages, which are discarded. Removing it here
+ # cuts ~18MB and drops the undici/tar CVEs Trivy flags in npm's own bundled
+ # deps — packages we don't use but that ship inside npm.
+ && rm -rf /usr/local/lib/node_modules/npm \
+           /usr/local/bin/npm \
+           /usr/local/bin/npx
 
 COPY --from=deps  /app/node_modules ./node_modules
 COPY --from=build /app/dist          ./dist
