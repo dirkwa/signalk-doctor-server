@@ -1,5 +1,8 @@
 import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { createServer } from './server.js';
+import { pruneOldImagesFor } from './image-retention.js';
+import { withMutex } from './mutex.js';
+import { SELF_IMAGE } from './routes/self.js';
 
 // Happy-Eyeballs (RFC 8305) attempt timeout for ALL outbound connections,
 // including global fetch() — which is how the version-drift / updater-health /
@@ -38,6 +41,22 @@ async function main(): Promise<void> {
     app.log.error(err);
     process.exit(1);
   }
+
+  // Reap old doctor images on boot. The updater only prunes the doctor's images
+  // when IT drives the doctor-update; a manual / installer-driven doctor change
+  // leaves the prior version on disk. Pruning here on boot — after the new image
+  // is confirmed running — gives the doctor the same self-healing the updater
+  // has for its own image, regardless of how the new image arrived.
+  //
+  // Image removal is a mutating op, so it goes through the single-writer mutex
+  // (CC-5, shared with the updater) under 'self-update'. If the updater holds the
+  // lock at boot, withMutex throws MutexBusyError; swallow it and let the next
+  // boot try. Fire-and-forget — never block startup on GC.
+  void withMutex('self-update', () =>
+    pruneOldImagesFor(SELF_IMAGE, 'signalk-doctor-server', { protectTags: ['beta'] }, app.log),
+  ).catch((err: unknown) => {
+    app.log.debug({ err }, 'boot image-retention skipped (lock busy or unavailable)');
+  });
 }
 
 void main();
