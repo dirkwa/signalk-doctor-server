@@ -55,9 +55,13 @@ function isImageInfo(value: unknown): value is ImageInfo {
   );
 }
 
-/** dockerode container inspect() — only the image-id field we read. */
-interface ContainerInspect {
-  Image?: string;
+/** Pull the resolved image id out of a dockerode container inspect() at the
+ *  boundary. Returns undefined for a malformed/absent `.Image` so a bad value
+ *  silently weakening the running-image protection is impossible. */
+function inspectImageId(value: unknown): string | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const image = (value as { Image?: unknown }).Image;
+  return typeof image === 'string' && image.length > 0 ? image : undefined;
 }
 
 export interface RetentionOptions {
@@ -162,8 +166,8 @@ export async function pruneOldImagesFor(
   //     or the keep window, so cleanup still runs rather than disabling itself.
   const inspected = await safe(() => rt.client.getContainer(runningContainer).inspect());
   if (inspected.ok) {
-    const info = inspected.value as unknown as ContainerInspect;
-    if (info.Image) protectedIds.add(info.Image);
+    const imageId = inspectImageId(inspected.value);
+    if (imageId !== undefined) protectedIds.add(imageId);
   }
 
   // (b) the ids that rolling tags resolve to.

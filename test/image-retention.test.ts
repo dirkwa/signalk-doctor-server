@@ -254,4 +254,31 @@ describe('pruneOldImagesFor', () => {
       expect.arrayContaining([`${PREFIX}:latest`, `${PREFIX}:0.7.21`, `${PREFIX}:0.7.20`]),
     );
   });
+
+  it('a malformed inspect (.Image not a string) does not protect by id, but rolling tags still do', async () => {
+    const removed: string[] = [];
+    const images: ImageRow[] = [
+      { Id: 'sha256:NEW', RepoTags: [`${PREFIX}:0.7.21`, `${PREFIX}:latest`], Created: 500 },
+      { Id: 'sha256:OLD', RepoTags: [`${PREFIX}:0.7.15`], Created: 200 },
+    ];
+    mockResolveRuntime.mockResolvedValue({
+      client: {
+        listImages: async () => images,
+        // inspect returns a junk shape — .Image is a number, not an id string
+        getContainer: () => ({ inspect: async () => ({ Image: 12345 }) }),
+        getImage: (ref: string) => ({
+          remove: async () => {
+            removed.push(ref);
+            return [{ Untagged: ref }];
+          },
+        }),
+      },
+    });
+
+    const r = await pruneOldImagesFor(PREFIX, 'signalk-doctor-server', { keep: 0 });
+
+    // Bad inspect id ignored; :latest still protects 0.7.21 by id. 0.7.15 reaped.
+    expect(r.removed).toEqual([`${PREFIX}:0.7.15`]);
+    expect(r.kept).toEqual(expect.arrayContaining([`${PREFIX}:0.7.21`, `${PREFIX}:latest`]));
+  });
 });
