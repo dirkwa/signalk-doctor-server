@@ -40,6 +40,21 @@ interface ImageInfo {
   Created: number;
 }
 
+/** Narrow a dockerode listImages() row at the boundary. A malformed row (bad
+ *  RepoTags, missing Id) must be skipped rather than throw — this is best-effort
+ *  pruning that must never reject the promise. */
+function isImageInfo(value: unknown): value is ImageInfo {
+  if (typeof value !== 'object' || value === null) return false;
+  const image = value as Partial<ImageInfo>;
+  return (
+    typeof image.Id === 'string' &&
+    typeof image.Created === 'number' &&
+    (image.RepoTags === undefined ||
+      image.RepoTags === null ||
+      (Array.isArray(image.RepoTags) && image.RepoTags.every((tag) => typeof tag === 'string')))
+  );
+}
+
 /** dockerode container inspect() — only the image-id field we read. */
 interface ContainerInspect {
   Image?: string;
@@ -119,9 +134,11 @@ export async function pruneOldImagesFor(
   const listed = await safe(() => rt.client.listImages({}));
   if (!listed.ok) return emptyResult();
 
-  // Collect this repo's locally-present tagged images (drop <none>).
+  // Collect this repo's locally-present tagged images (drop <none>). Narrow each
+  // dockerode row at the boundary; a malformed row is skipped, not thrown on.
   const tagged: TaggedImage[] = [];
-  for (const img of listed.value as ImageInfo[]) {
+  const images = Array.isArray(listed.value) ? listed.value.filter(isImageInfo) : [];
+  for (const img of images) {
     if (!img.RepoTags) continue;
     for (const repoTag of img.RepoTags) {
       const colon = repoTag.lastIndexOf(':');

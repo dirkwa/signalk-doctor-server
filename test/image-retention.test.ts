@@ -174,6 +174,36 @@ describe('pruneOldImagesFor', () => {
     expect(r).toEqual({ removed: [], kept: [], skipped: [] });
   });
 
+  it('skips malformed dockerode rows instead of throwing', async () => {
+    const removed: string[] = [];
+    // A mix of junk rows (bad RepoTags, missing Id, non-object) and one valid
+    // old image. The guard must drop the junk and still reap the real one.
+    const rows = [
+      null,
+      { Id: 123, RepoTags: [`${PREFIX}:bad`], Created: 1 }, // Id not a string
+      { Id: 'sha256:X', RepoTags: 'not-an-array', Created: 2 }, // RepoTags not an array
+      { Id: 'sha256:RUN', RepoTags: [`${PREFIX}:0.7.21`, `${PREFIX}:latest`], Created: 500 },
+      { Id: 'sha256:OLD', RepoTags: [`${PREFIX}:0.7.15`], Created: 200 },
+    ];
+    mockResolveRuntime.mockResolvedValue({
+      client: {
+        listImages: async () => rows,
+        getContainer: () => ({ inspect: async () => ({ Image: 'sha256:RUN' }) }),
+        getImage: (ref: string) => ({
+          remove: async () => {
+            removed.push(ref);
+            return [{ Untagged: ref }];
+          },
+        }),
+      },
+    });
+
+    const r = await pruneOldImagesFor(PREFIX, 'signalk-doctor-server', { keep: 0 });
+
+    expect(r.removed).toEqual([`${PREFIX}:0.7.15`]);
+    expect(removed).toEqual([`${PREFIX}:0.7.15`]);
+  });
+
   it('protects :latest and :dirkwa by default, even with no opts and no running container', async () => {
     const removed: string[] = [];
     const images: ImageRow[] = [
