@@ -5,7 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { listTags } from '../ghcr.js';
 import { compareSemver } from '../tagClassifier.js';
 
-const SELF_IMAGE = process.env.SELF_IMAGE ?? 'ghcr.io/dirkwa/signalk-doctor-server';
+/** Our own image ref. Exported so the boot-time image prune in index.ts uses
+ *  the same value and the two can't drift. */
+export const SELF_IMAGE = process.env.SELF_IMAGE ?? 'ghcr.io/dirkwa/signalk-doctor-server';
 
 // Same package.json read pattern as health.ts. The cached "running" version
 // is what users see — it has to come from the engine's own package.json

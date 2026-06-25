@@ -24,6 +24,12 @@ export function classifyChannel(tag: string): Channel {
 
 const SEMVER_RE = /^v?(\d+)\.(\d+)\.(\d+)(?:-(beta|rc)\.(\d+))?$/i;
 
+/** Is this tag a concrete semver (e.g. "0.7.21"), not a rolling ref like
+ *  "latest" / "master"? Used by image retention to find rollback versions. */
+export function isSemverTag(tag: string): boolean {
+  return SEMVER_RE.test(tag);
+}
+
 /**
  * Compare two semver-ish tags. Returns >0 if a is newer, <0 if b is newer,
  * 0 if equal or incomparable.
