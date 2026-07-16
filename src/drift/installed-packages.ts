@@ -3,9 +3,18 @@ import type Docker from 'dockerode';
 import { resolveRuntime, safe } from '../podman/client.js';
 import type { CategorizedError } from '../errors.js';
 
+/** One tracked package with its version at each of the two locations a copy
+ *  can live in. At least one of the two is non-null (a package absent from
+ *  both locations is omitted from the result entirely). */
 export interface InstalledPackage {
   name: string;
-  version: string;
+  /** Version in the server's own app tree — the copy the image ships and
+   *  the server core loads. Null when the image doesn't carry the package. */
+  image: string | null;
+  /** Version in the data dir's plugin tree (`<configPath>/node_modules`) —
+   *  npm-installed there as a dependency of the user's plugins and loaded by
+   *  those plugins. Null when no data-dir copy exists. */
+  dataDir: string | null;
 }
 
 /** The set of tracked packages with their installed versions, read from
@@ -60,39 +69,47 @@ const TRACKED_PACKAGES = [
 
 const TARGET_CONTAINER = 'signalk-server';
 
+function dataDirRoot(): string {
+  return process.env.SIGNALK_DOCTOR_TARGET_CONF_DIR ?? '/home/node/.signalk';
+}
+function appDirRoot(): string {
+  return process.env.SIGNALK_DOCTOR_TARGET_APP_DIR ?? '/home/node/signalk';
+}
+
 /**
- * Leaf directories from which we ancestor-walk upward looking for
- * node_modules/<pkg>/package.json, in resolution priority order (first hit
- * wins — mirrors signalk-server's diagnostics walk, which prefers
- * configPath over appPath). Resolved at call time so tests/env can override.
- *
- * Concrete bases for the verified ghcr.io/dirkwa/signalk-server:dirkwa image
- * (and the official `_rel` layout):
- *   1. data dir (configPath): plugin/data-dir copies under <data>/node_modules.
- *   2. the signalk-server package's OWN node_modules: in the dirkwa image
+ * Candidate package.json path for the DATA-DIR copy of one package: exactly
+ * `<configPath>/node_modules/<pkg>/package.json`, where signalk-server's
+ * appstore npm-installs the user's plugins (and npm hoists their shared
+ * dependencies). No ancestor walk — walking up from the data dir would leave
+ * the user's tree and misattribute an app-tree copy as a user install.
+ */
+function dataDirCandidatePaths(name: string): string[] {
+  return [`${dataDirRoot()}/node_modules/${name}/package.json`];
+}
+
+/**
+ * Candidate package.json absolute paths for the IMAGE (app-tree) copy of one
+ * package, most-specific first. Leaf directories we ancestor-walk upward from,
+ * for the verified ghcr.io/dirkwa/signalk-server:dirkwa image (and the
+ * official `_rel` layout):
+ *   1. the signalk-server package's OWN node_modules: in the dirkwa image
  *      @signalk/* is nested there (top-level @signalk/* is pruned). Walking
  *      UP from here also reaches the hoisted top-level node_modules, so
  *      @canboat/* (and @signalk/* on _rel, where it is not pruned) resolve
  *      via the same walk.
- *   3. the install root: belt-and-suspenders for layouts where signalk-server
+ *   2. the install root: belt-and-suspenders for layouts where signalk-server
  *      isn't nested under its own name.
- */
-function baseDirs(): string[] {
-  const dataDir = process.env.SIGNALK_DOCTOR_TARGET_CONF_DIR ?? '/home/node/.signalk';
-  const appDir = process.env.SIGNALK_DOCTOR_TARGET_APP_DIR ?? '/home/node/signalk';
-  return [dataDir, `${appDir}/node_modules/signalk-server`, appDir];
-}
-
-/**
- * Candidate package.json absolute paths for one package name, most-specific
- * first. For each base dir we emit node_modules/<pkg>/package.json at the base
- * AND at every ancestor up to the filesystem root, so a hoisted dependency is
+ * For each base dir we emit node_modules/<pkg>/package.json at the base AND
+ * at every ancestor up to the filesystem root, so a hoisted dependency is
  * found from a nested leaf. Deduped because the base dirs share ancestors.
+ * The walk stops before it would reach the data dir's own tree only because
+ * the data dir is not an ancestor of the app dir in any supported layout.
  */
-function candidatePaths(name: string): string[] {
+function imageCandidatePaths(name: string): string[] {
+  const appDir = appDirRoot();
   const out: string[] = [];
   const seen = new Set<string>();
-  for (const base of baseDirs()) {
+  for (const base of [`${appDir}/node_modules/signalk-server`, appDir]) {
     const segments = base.split('/').filter((s) => s.length > 0);
     for (let i = segments.length; i >= 0; i--) {
       const prefix = i === 0 ? '' : `/${segments.slice(0, i).join('/')}`;
@@ -169,12 +186,10 @@ function dockerodeProbe(container: Docker.Container): ContainerProbe {
 }
 
 type ReadOne =
-  | { kind: 'found'; version: string }
-  | { kind: 'absent' }
-  | { kind: 'error'; detail: string };
+  { kind: 'found'; version: string } | { kind: 'absent' } | { kind: 'error'; detail: string };
 
-async function readPackageVersion(probe: ContainerProbe, name: string): Promise<ReadOne> {
-  for (const path of candidatePaths(name)) {
+async function readVersionAt(probe: ContainerProbe, candidates: string[]): Promise<ReadOne> {
+  for (const path of candidates) {
     const res = await probe.fetch(path);
     if (res.ok) {
       const entry = firstTarEntry(res.value);
@@ -276,18 +291,35 @@ export async function readInstalledPackages(
   const packages: InstalledPackage[] = [];
   let firstRuntimeError: string | null = null;
   for (const name of TRACKED_PACKAGES) {
-    const r = await readPackageVersion(target, name);
-    if (r.kind === 'error') {
+    // Each location is looked up independently so a copy in the user's
+    // plugin tree can never shadow (or be shadowed by) the image's copy —
+    // the two drift for different reasons and heal through different paths.
+    const [dataDir, image] = await Promise.all([
+      readVersionAt(target, dataDirCandidatePaths(name)),
+      readVersionAt(target, imageCandidatePaths(name)),
+    ]);
+    if (dataDir.kind === 'error' || image.kind === 'error') {
       // The container is reachable (probe succeeded), so a per-path runtime
-      // error is usually a transient glitch on one package — omit it and keep
-      // going for partial success. But remember the first one: if it turns out
-      // EVERY read failed (e.g. a permission/socket fault that the inspect
+      // error is usually a transient glitch on one package — omit the whole
+      // package and keep going for partial success. Deliberately do NOT keep
+      // a location that resolved while its sibling errored: null encodes
+      // "absent from this location", and reporting an errored read as absence
+      // would lie to the operator. But remember the first error: if it turns
+      // out EVERY read failed (e.g. a permission/socket fault that the inspect
       // probe didn't hit), we must not return an empty ok:[] that looks like a
       // healthy image with no packages and zeroes the prior data.
-      if (firstRuntimeError === null) firstRuntimeError = r.detail;
+      const detail = dataDir.kind === 'error' ? dataDir.detail : null;
+      const imageDetail = image.kind === 'error' ? image.detail : null;
+      if (firstRuntimeError === null) firstRuntimeError = detail ?? imageDetail;
       continue;
     }
-    if (r.kind === 'found') packages.push({ name, version: r.version });
+    if (dataDir.kind === 'found' || image.kind === 'found') {
+      packages.push({
+        name,
+        image: image.kind === 'found' ? image.version : null,
+        dataDir: dataDir.kind === 'found' ? dataDir.version : null,
+      });
+    }
   }
 
   // Zero packages with a runtime error means every read failed — report it so

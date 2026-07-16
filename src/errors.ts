@@ -1,11 +1,5 @@
 export type ErrorKind =
-  | 'network'
-  | 'registry-unavailable'
-  | 'auth'
-  | 'disk'
-  | 'permission'
-  | 'not-found'
-  | 'unknown';
+  'network' | 'registry-unavailable' | 'auth' | 'disk' | 'permission' | 'not-found' | 'unknown';
 
 export interface CategorizedError {
   kind: ErrorKind;

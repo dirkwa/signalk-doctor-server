@@ -2,12 +2,7 @@ import { open, rename, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 
 export type Operation =
-  | 'switch'
-  | 'rollback'
-  | 'self-update'
-  | 'hardware-apply'
-  | 'recover'
-  | 'installer-refresh';
+  'switch' | 'rollback' | 'self-update' | 'hardware-apply' | 'recover' | 'installer-refresh';
 
 export interface LockInfo {
   owner: 'updater' | 'doctor';

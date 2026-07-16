@@ -122,11 +122,7 @@ function artifacts(): ArtifactDescriptor[] {
 }
 
 export type ArtifactStatus =
-  | 'updated'
-  | 'unchanged'
-  | 'mount-missing'
-  | 'fetch-failed'
-  | 'write-failed';
+  'updated' | 'unchanged' | 'mount-missing' | 'fetch-failed' | 'write-failed';
 
 export interface ArtifactResult {
   id: string;

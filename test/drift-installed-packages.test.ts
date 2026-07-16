@@ -86,8 +86,8 @@ describe('readInstalledPackages', () => {
     const res = await readInstalledPackages(mapProbe(byPath));
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const versions = Object.fromEntries(res.installed.packages.map((p) => [p.name, p.version]));
-    expect(versions).toEqual({
+    const imageVersions = Object.fromEntries(res.installed.packages.map((p) => [p.name, p.image]));
+    expect(imageVersions).toEqual({
       '@canboat/canboatjs': '3.20.0',
       '@canboat/ts-pgns': '1.0.0',
       '@signalk/n2k-signalk': '4.5.0',
@@ -97,6 +97,7 @@ describe('readInstalledPackages', () => {
       '@signalk/server-api': '2.25.0',
       '@signalk/streams': '6.6.0',
     });
+    expect(res.installed.packages.every((p) => p.dataDir === null)).toBe(true);
   });
 
   it('locks the hoisted-@canboat / nested-@signalk resolution (a flat scan drops 5 of 8)', async () => {
@@ -116,15 +117,18 @@ describe('readInstalledPackages', () => {
     const res = await readInstalledPackages(mapProbe(byPath));
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    const versions = Object.fromEntries(res.installed.packages.map((p) => [p.name, p.version]));
-    expect(versions).toMatchObject({
+    const imageVersions = Object.fromEntries(res.installed.packages.map((p) => [p.name, p.image]));
+    expect(imageVersions).toMatchObject({
       '@canboat/canboatjs': '3.20.0', // hoisted
       '@signalk/server-api': '2.25.0', // nested
     });
   });
 
-  it('prefers the data dir over the app dir (configPath before appPath)', async () => {
-    // A data-dir copy must win over the image-baked one (operator override).
+  it('reports the data-dir and image copies separately (no shadowing)', async () => {
+    // The regression guard for the misattribution this split fixes: a copy in
+    // the user's plugin tree (~/.signalk/node_modules, npm-installed as a
+    // plugin dependency) must NOT shadow the image's copy — a fully current
+    // image used to show as drifting because a stale plugin dep won the walk.
     const byPath: Record<string, string> = {
       [`${DATA}/node_modules/@canboat/canboatjs/package.json`]: pkgJson(
         '@canboat/canboatjs',
@@ -139,7 +143,22 @@ describe('readInstalledPackages', () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     const canboat = res.installed.packages.find((p) => p.name === '@canboat/canboatjs');
-    expect(canboat?.version).toBe('9.9.9');
+    expect(canboat).toEqual({ name: '@canboat/canboatjs', image: '3.20.0', dataDir: '9.9.9' });
+  });
+
+  it('reports a package that exists only in the data dir (image: null)', async () => {
+    const byPath: Record<string, string> = {
+      [`${DATA}/node_modules/@signalk/server-api/package.json`]: pkgJson(
+        '@signalk/server-api',
+        '2.24.0',
+      ),
+    };
+    const res = await readInstalledPackages(mapProbe(byPath));
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.installed.packages).toEqual([
+      { name: '@signalk/server-api', image: null, dataDir: '2.24.0' },
+    ]);
   });
 
   it('omits a package that is missing everywhere (no error)', async () => {
@@ -229,7 +248,51 @@ describe('readInstalledPackages', () => {
     const res = await readInstalledPackages(probe);
     expect(res.ok).toBe(true);
     if (!res.ok) return;
-    expect(res.installed.packages).toEqual([{ name: '@canboat/canboatjs', version: '3.20.0' }]);
+    expect(res.installed.packages).toEqual([
+      { name: '@canboat/canboatjs', image: '3.20.0', dataDir: null },
+    ]);
+  });
+
+  it('omits the whole package when one location errors while the other resolves', async () => {
+    // server-api's image copy reads fine but its data-dir read hits a real
+    // (non-not-found) error. Reporting the found half would render the
+    // errored location as null — and null means "absent from this location",
+    // so a transient read error would masquerade as absence. The package is
+    // deliberately omitted for this scan instead; unaffected packages still
+    // report, and the error is remembered for the all-reads-failed guard.
+    const permErr: CategorizedError = {
+      kind: 'permission',
+      userMessage: 'Permission denied. Check container socket and mount permissions.',
+      raw: 'EACCES',
+    };
+    const canboatPath = `${APP}/node_modules/@canboat/canboatjs/package.json`;
+    const serverApiImagePath = `${NESTED}/node_modules/@signalk/server-api/package.json`;
+    const serverApiDataPath = `${DATA}/node_modules/@signalk/server-api/package.json`;
+    const probe: ContainerProbe = {
+      probe: () => Promise.resolve({ ok: true, value: Buffer.alloc(0) }),
+      fetch: (path) => {
+        if (path === canboatPath) {
+          return Promise.resolve({
+            ok: true,
+            value: ustarTar(pkgJson('@canboat/canboatjs', '3.20.0')),
+          });
+        }
+        if (path === serverApiImagePath) {
+          return Promise.resolve({
+            ok: true,
+            value: ustarTar(pkgJson('@signalk/server-api', '2.25.0')),
+          });
+        }
+        if (path === serverApiDataPath) return Promise.resolve({ ok: false, error: permErr });
+        return Promise.resolve({ ok: false, error: NOT_FOUND });
+      },
+    };
+    const res = await readInstalledPackages(probe);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.installed.packages).toEqual([
+      { name: '@canboat/canboatjs', image: '3.20.0', dataDir: null },
+    ]);
   });
 
   it('returns runtime — never ok:[] — when the container is reachable but every read errors', async () => {

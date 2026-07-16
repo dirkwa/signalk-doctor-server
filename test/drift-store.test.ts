@@ -34,9 +34,9 @@ describe('drift store', () => {
       packages: [
         {
           name: '@canboat/canboatjs',
-          installed: '3.16.3',
+          image: { installed: '3.16.3', classification: 'minor' },
+          dataDir: { installed: '3.10.0', classification: 'minor' },
           latest: '3.19.0',
-          classification: 'minor',
           etag: 'W/"abc"',
           lastFetchedAt: '2026-05-24T00:00:00.000Z',
         },
@@ -45,6 +45,76 @@ describe('drift store', () => {
     await saveDriftReport(report);
     const loaded = await loadDriftReport();
     expect(loaded).toEqual(report);
+  });
+
+  it('migrates a pre-v0.8 single-version package entry to the two-location shape', async () => {
+    // Old entries carried one first-hit-wins `installed` version whose
+    // location (image vs data dir) is ambiguous in hindsight. The migration
+    // keeps what the registry would have to rebuild (latest/etag/
+    // lastFetchedAt — precious offline) and drops the ambiguous version;
+    // the next scan refills both locations from local container reads.
+    const oldReport = {
+      signalkImageTag: 'ghcr.io/dirkwa/signalk-server:dirkwa-3e651e9',
+      lastScannedAt: '2026-05-24T00:00:00.000Z',
+      lastSuccessfulScanAt: '2026-05-24T00:00:00.000Z',
+      online: true,
+      lastFetchError: null,
+      packages: [
+        {
+          name: '@signalk/server-api',
+          installed: '2.24.0',
+          latest: '2.30.0',
+          classification: 'minor',
+          etag: 'W/"abc"',
+          lastFetchedAt: '2026-05-24T00:00:00.000Z',
+        },
+      ],
+    };
+    await writeFile(join(dir, 'drift.json'), JSON.stringify(oldReport, null, 2));
+    const loaded = await loadDriftReport();
+    expect(loaded?.packages).toEqual([
+      {
+        name: '@signalk/server-api',
+        image: null,
+        dataDir: null,
+        latest: '2.30.0',
+        etag: 'W/"abc"',
+        lastFetchedAt: '2026-05-24T00:00:00.000Z',
+      },
+    ]);
+  });
+
+  it('drops malformed package entries and sanitizes bad location objects', async () => {
+    const report = {
+      signalkImageTag: null,
+      lastScannedAt: '2026-05-24T00:00:00.000Z',
+      lastSuccessfulScanAt: null,
+      online: false,
+      lastFetchError: null,
+      packages: [
+        { latest: '1.0.0' }, // no name → dropped
+        {
+          name: '@canboat/ts-pgns',
+          image: { installed: '1.11.18', classification: 'not-a-classification' },
+          dataDir: { classification: 'minor' }, // no installed → null
+          latest: '1.11.18',
+          etag: null,
+          lastFetchedAt: null,
+        },
+      ],
+    };
+    await writeFile(join(dir, 'drift.json'), JSON.stringify(report, null, 2));
+    const loaded = await loadDriftReport();
+    expect(loaded?.packages).toEqual([
+      {
+        name: '@canboat/ts-pgns',
+        image: { installed: '1.11.18', classification: 'unknown' },
+        dataDir: null,
+        latest: '1.11.18',
+        etag: null,
+        lastFetchedAt: null,
+      },
+    ]);
   });
 
   it('migrates a pre-v0.7.5 report missing lastFetchError → null', async () => {

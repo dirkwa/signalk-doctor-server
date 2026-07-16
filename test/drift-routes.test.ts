@@ -16,9 +16,17 @@ const FIXTURE: DriftReport = {
   packages: [
     {
       name: '@canboat/canboatjs',
-      installed: '3.16.3',
+      image: { installed: '3.16.3', classification: 'minor' },
+      dataDir: null,
       latest: '3.19.0',
-      classification: 'minor',
+      etag: null,
+      lastFetchedAt: '2026-05-24T00:00:00.000Z',
+    },
+    {
+      name: '@signalk/server-api',
+      image: null,
+      dataDir: { installed: '2.24.0', classification: 'minor' },
+      latest: '2.30.0',
       etag: null,
       lastFetchedAt: '2026-05-24T00:00:00.000Z',
     },
