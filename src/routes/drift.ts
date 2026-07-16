@@ -57,6 +57,14 @@ export async function registerDriftRoutes(
     // acquireMutex inside the job — this pre-check is unavoidably racy.
     const lock = await readLock();
     if (lock) {
+      // Recheck: a concurrent POST may have started a heal (and taken the
+      // lock) while we awaited readLock — reuse it rather than 409ing the
+      // operator off a heal they themselves just started.
+      const startedMeanwhile = findRunningHealJob();
+      if (startedMeanwhile) {
+        reply.code(202);
+        return { ...startedMeanwhile, status: 'running', reused: true };
+      }
       reply.code(409);
       return { error: 'another operation is in progress', lock };
     }
