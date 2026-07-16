@@ -251,6 +251,76 @@ describe('runDataDirHeal', () => {
     expect(res.packages).toBeUndefined();
   });
 
+  it('attributes non-updated outcomes with dependents from the explain pass', async () => {
+    const stuck = report([
+      pkg('@signalk/streams', loc('6.8.0', 'up-to-date'), loc('5.1.4', 'major'), '6.8.0'),
+      pkg('@signalk/server-api', loc('2.30.0', 'up-to-date'), loc('2.9.0', 'minor'), '2.30.0'),
+    ]);
+    const explainJson = JSON.stringify([
+      {
+        name: '@signalk/streams',
+        version: '5.1.4',
+        dependents: [{ spec: '^5.0.0', from: { name: 'signalk-some-plugin', version: '1.2.3' } }],
+      },
+      {
+        name: '@signalk/server-api',
+        version: '2.9.0',
+        dependents: [{ spec: '2.9.x', from: { name: 'signalk-server', version: '2.18.0' } }],
+      },
+    ]);
+    const seq = reportSequence(stuck, stuck); // npm moves nothing
+    const res = await runDataDirHeal({
+      loadReport: seq.loadReport,
+      rescan: seq.rescan,
+      exec: (cmd) =>
+        Promise.resolve(
+          cmd[1] === 'explain'
+            ? { ok: true, exitCode: 0, output: explainJson }
+            : { ok: true, exitCode: 0, output: 'up to date' },
+        ),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const streams = res.packages.find((p) => p.name === '@signalk/streams');
+    expect(streams?.outcome).toBe('range-limited');
+    expect(streams?.heldBy).toEqual([
+      { name: 'signalk-some-plugin', version: '1.2.3', spec: '^5.0.0' },
+    ]);
+    expect(streams?.heldByEmbeddedServer).toBeUndefined();
+    const api = res.packages.find((p) => p.name === '@signalk/server-api');
+    expect(api?.heldByEmbeddedServer).toBe(true);
+    expect(api?.heldBy).toEqual([{ name: 'signalk-server', version: '2.18.0', spec: '2.9.x' }]);
+  });
+
+  it('heals fine without attribution when the explain pass fails', async () => {
+    const before = report([
+      pkg('@signalk/server-api', loc('2.30.0', 'up-to-date'), loc('2.24.0', 'minor'), '2.30.0'),
+    ]);
+    const after = report([
+      pkg(
+        '@signalk/server-api',
+        loc('2.30.0', 'up-to-date'),
+        loc('2.30.0', 'up-to-date'),
+        '2.30.0',
+      ),
+    ]);
+    const seq = reportSequence(before, after);
+    const res = await runDataDirHeal({
+      loadReport: seq.loadReport,
+      rescan: seq.rescan,
+      exec: (cmd) =>
+        Promise.resolve(
+          cmd[1] === 'explain'
+            ? { ok: false, reason: 'runtime', detail: 'exec hiccup' }
+            : { ok: true, exitCode: 0, output: 'changed 1 package' },
+        ),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.packages[0]?.outcome).toBe('updated');
+    expect(res.packages[0]?.heldBy).toBeUndefined();
+  });
+
   it('reports unchanged — never updated — when the post-scan lacks the package', async () => {
     // Absence of post-state (rescan could not read the package) is not
     // absence of the copy; claiming "updated (hoisted away)" from missing
