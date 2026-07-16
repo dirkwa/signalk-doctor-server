@@ -276,7 +276,7 @@ describe('drift heal routes', () => {
     }
   });
 
-  it('POST /api/drift/explain surfaces runner failure as 502', async () => {
+  it('POST /api/drift/explain surfaces runner failure as 500 — never the proxy-reserved 502', async () => {
     const app = await bareApp(
       () => Promise.resolve(okResult()),
       () => Promise.resolve({ ok: false, detail: 'unreachable: no socket' }),
@@ -288,7 +288,7 @@ describe('drift heal routes', () => {
         headers: { authorization: 'Bearer sekret' },
         payload: { packages: ['@signalk/streams'] },
       });
-      expect(res.statusCode).toBe(502);
+      expect(res.statusCode).toBe(500);
       expect((res.json() as { error: string }).error).toMatch(/no socket/);
     } finally {
       await app.close();
