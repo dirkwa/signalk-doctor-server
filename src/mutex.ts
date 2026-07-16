@@ -54,16 +54,34 @@ async function writeAtomic(path: string, body: string): Promise<void> {
 }
 
 export async function readLock(): Promise<LockInfo | null> {
+  const state = await readLockState();
+  return state.kind === 'lock' ? state.lock : null;
+}
+
+type LockState = { kind: 'absent' } | { kind: 'unreadable' } | { kind: 'lock'; lock: LockInfo };
+
+/** Like readLock(), but keeps "no lock file" distinguishable from "a lock
+ *  file exists that we cannot read or parse". release() needs the
+ *  difference: an unreadable lock proves nothing about ownership, so it
+ *  must be left in place, while an absent one simply means nothing to do. */
+async function readLockState(): Promise<LockState> {
+  let text: string;
   try {
     const fh = await open(lockPath(), 'r');
     try {
-      const text = (await fh.readFile()).toString('utf8');
-      return JSON.parse(text) as LockInfo;
+      text = (await fh.readFile()).toString('utf8');
     } finally {
       await fh.close();
     }
+  } catch (err) {
+    return (err as { code?: string }).code === 'ENOENT'
+      ? { kind: 'absent' }
+      : { kind: 'unreadable' };
+  }
+  try {
+    return { kind: 'lock', lock: JSON.parse(text) as LockInfo };
   } catch {
-    return null;
+    return { kind: 'unreadable' };
   }
 }
 
@@ -126,16 +144,22 @@ export async function acquireMutex(operation: Operation): Promise<MutexHandle> {
   return {
     release: async () => {
       // One-shot and ownership-verified: only remove the lock while it is
-      // still OURS. If it was force-cleared and re-acquired by another
-      // operation while this one settled, unlinking blindly would delete
-      // the new owner's lock and reopen the concurrent-mutation window
-      // CC-5 exists to close. (The read-then-unlink is itself a narrow
-      // race, but it shrinks the window from "always" to "microseconds".)
+      // provably still OURS. If it was force-cleared and re-acquired by
+      // another operation while this one settled, unlinking blindly would
+      // delete the new owner's lock and reopen the concurrent-mutation
+      // window CC-5 exists to close. An UNREADABLE lock proves nothing
+      // about ownership, so it is left in place too (force-clear is the
+      // operator's escape hatch). The read-then-unlink pair is still a
+      // narrow race — the shared protocol with the updater is existence-
+      // based, and the filesystem offers no compare-and-delete — but the
+      // nonce check shrinks the exposure from the whole operation's
+      // duration to the microseconds between the two syscalls, reachable
+      // only after an operator already force-cleared mid-operation.
       if (released) return;
       released = true;
       try {
-        const current = await readLock();
-        if (current !== null && current.nonce !== info.nonce) return;
+        const state = await readLockState();
+        if (state.kind !== 'lock' || state.lock.nonce !== info.nonce) return;
         await unlink(lockPath());
       } catch {
         // best-effort

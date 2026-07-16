@@ -167,6 +167,18 @@ export async function execInContainer(
     if (lingered.kind === 'exit') {
       return { ok: true, exitCode: lingered.code, output: collector.text() };
     }
+    if (lingered.kind === 'error') {
+      // CC-6: the linger inspection failed with a real categorized error —
+      // surface it instead of reducing it to a generic timeout. The stop
+      // remains unproven either way.
+      return {
+        ok: false,
+        reason: 'runtime',
+        stillRunning: true,
+        detail: `${lingered.error.kind}: ${lingered.error.userMessage}`,
+        error: lingered.error,
+      };
+    }
     return {
       ok: false,
       reason: 'timeout',

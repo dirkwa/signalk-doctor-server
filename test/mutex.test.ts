@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { acquireMutex, forceClear, readLock } from '../src/mutex.js';
@@ -45,6 +45,17 @@ describe('mutex ownership', () => {
     await first.release();
     expect((await readLock())?.operation).toBe('recover');
     await second.release();
+  });
+
+  it('leaves an unreadable lock in place — no ownership, no unlink', async () => {
+    // A corrupt/hand-edited lock file proves nothing about who owns it;
+    // deleting it on a hunch would break CC-5. Only force-clear may remove
+    // it.
+    const handle = await acquireMutex('heal-plugin-deps');
+    await writeFile(join(dir, 'operation.lock'), '{ not json');
+    await handle.release();
+    await expect(access(join(dir, 'operation.lock'))).resolves.toBeUndefined();
+    await forceClear();
   });
 
   it('rejects acquisition while held and releases cleanly', async () => {
