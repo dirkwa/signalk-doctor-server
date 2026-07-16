@@ -155,6 +155,21 @@ describe('probeDependencyDrift', () => {
     expect(res.message).not.toMatch(/no major drift/);
   });
 
+  it('is unknown when one LOCATION is uncompared even though its sibling ranks worse', async () => {
+    // Regression guard: hasUnknown once went through worstOf(), where a
+    // sibling location's minor outranks unknown and hid it — minor + unknown
+    // reported ok and claimed "no major drift" for a location nobody compared.
+    await saveDriftReport(
+      report([
+        pkg('@signalk/server-api', loc('2.24.0', 'minor'), loc('not-semver', 'unknown'), '2.30.0'),
+      ]),
+    );
+    const res = await probeDependencyDrift();
+    expect(res.status).toBe('unknown');
+    expect(res.message).toMatch(/comparison incomplete/);
+    expect(res.message).not.toMatch(/no major drift/);
+  });
+
   it('a known major still warns even when another package is uncompared', async () => {
     await saveDriftReport(
       report([

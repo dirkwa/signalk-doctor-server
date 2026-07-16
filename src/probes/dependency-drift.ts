@@ -59,6 +59,13 @@ function collectMajors(packages: DriftPackage[]): MajorEntry[] {
   return majors;
 }
 
+/** True when the package's drift cannot be fully judged: no location was
+ *  resolved at all, or a resolved location lacks a registry comparison. */
+function isUncompared(p: DriftPackage): boolean {
+  if (p.image === null && p.dataDir === null) return true;
+  return p.image?.classification === 'unknown' || p.dataDir?.classification === 'unknown';
+}
+
 function worstOf(p: DriftPackage): DriftClassification {
   const classifications = [p.image?.classification, p.dataDir?.classification].filter(
     (c): c is DriftClassification => c !== undefined,
@@ -191,10 +198,12 @@ export async function probeDependencyDrift(): Promise<ProbeResult> {
   const summary = countSummary(report.packages);
   const stale = staleSuffix(oldestFetchAgeMs(report.packages.map((p) => p.lastFetchedAt)));
 
-  // A package without a registry comparison could itself be major-behind,
+  // A location without a registry comparison could itself be major-behind,
   // so "no major drift" is unprovable while any classification is unknown —
   // stay honest and report the comparison as incomplete instead of ok.
-  const hasUnknown = report.packages.some((p) => worstOf(p) === 'unknown');
+  // Checked per LOCATION, not via worstOf(): a sibling location's minor
+  // outranks unknown in the severity order and would hide it.
+  const hasUnknown = report.packages.some(isUncompared);
   if (hasUnknown) {
     return result(
       t0,
