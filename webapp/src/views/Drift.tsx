@@ -8,6 +8,8 @@ import {
   type ApiError,
   type DriftClassification,
   type DriftFetchError,
+  type DriftLocation,
+  type DriftPackage,
   type DriftReport,
 } from '../api';
 
@@ -70,12 +72,40 @@ const CLASSIFICATION_ORDER: Record<DriftClassification, number> = {
   'up-to-date': 0,
 };
 
+/** The more severe of a package's two location classifications. A package
+ *  with no resolved location at all (e.g. right after a report-format
+ *  migration, before the next scan) counts as unknown. */
+function worstClassification(p: DriftPackage): DriftClassification {
+  const locations = [p.image, p.dataDir].filter((l): l is DriftLocation => l !== null);
+  if (locations.length === 0) return 'unknown';
+  return locations.reduce((worst, l) =>
+    CLASSIFICATION_ORDER[l.classification] > CLASSIFICATION_ORDER[worst.classification] ? l : worst,
+  ).classification;
+}
+
 function sortBySeverity(packages: DriftReport['packages']): DriftReport['packages'] {
   return [...packages].sort((a, b) => {
-    const sev = CLASSIFICATION_ORDER[b.classification] - CLASSIFICATION_ORDER[a.classification];
+    const sev =
+      CLASSIFICATION_ORDER[worstClassification(b)] - CLASSIFICATION_ORDER[worstClassification(a)];
     if (sev !== 0) return sev;
     return a.name.localeCompare(b.name);
   });
+}
+
+/** Version + classification badge for one location; a plain dash when the
+ *  package has no copy at that location. */
+function LocationCell({ location }: { location: DriftLocation | null }) {
+  if (location === null) {
+    return <td className="text-muted small">—</td>;
+  }
+  return (
+    <td className="font-monospace small text-nowrap">
+      {location.installed}{' '}
+      <Badge color={CLASSIFICATION_COLOR[location.classification]} pill>
+        {location.classification}
+      </Badge>
+    </td>
+  );
 }
 
 export function Drift() {
@@ -139,7 +169,7 @@ export function Drift() {
   }
 
   const sorted = sortBySeverity(report.packages);
-  const drifting = report.packages.filter((p) => p.classification !== 'up-to-date');
+  const drifting = report.packages.filter((p) => worstClassification(p) !== 'up-to-date');
 
   return (
     <div>
@@ -153,10 +183,14 @@ export function Drift() {
         </CardHeader>
         <CardBody>
           <p>
-            Drift between the npm packages baked into the running <code>signalk-server</code> image
-            and the latest versions on the npm registry. The doctor reads installed versions
-            directly from the running <code>signalk-server</code> container's filesystem, then
-            queries npmjs for each package's latest stable release.
+            Drift between the npm packages the running <code>signalk-server</code> uses and the
+            latest versions on the npm registry. Each tracked package can exist in two places, read
+            directly from the running container's filesystem: the <strong>Image</strong> copy is
+            baked into the <code>signalk-server</code> image and is what the server core loads — it
+            only changes when the image is updated. The <strong>User install</strong> copy lives in
+            the data dir's plugin tree (<code>~/.signalk/node_modules</code>), put there by npm as a
+            dependency of your installed plugins and loaded by those plugins — image updates never
+            touch it.
           </p>
           <dl className="row small mb-0">
             <dt className="col-sm-3">SignalK image</dt>
@@ -228,16 +262,16 @@ export function Drift() {
             <p className="text-muted small p-3 mb-0">
               {report.lastFetchError !== null
                 ? 'No package data yet — see the diagnostic alert above for the next step.'
-                : 'No tracked packages found. The scan reached the container without error but found none of the tracked packages in the running image.'}
+                : 'No tracked packages found. The scan reached the container without error but found none of the tracked packages in either location.'}
             </p>
           ) : (
             <Table responsive size="sm" className="mb-0">
               <thead>
                 <tr>
                   <th>Package</th>
-                  <th>Installed</th>
+                  <th>Image</th>
+                  <th>User install</th>
                   <th>Latest</th>
-                  <th>Status</th>
                   <th>Last fetched</th>
                 </tr>
               </thead>
@@ -245,13 +279,9 @@ export function Drift() {
                 {sorted.map((p) => (
                   <tr key={p.name}>
                     <td className="font-monospace small">{p.name}</td>
-                    <td className="font-monospace small">{p.installed}</td>
+                    <LocationCell location={p.image} />
+                    <LocationCell location={p.dataDir} />
                     <td className="font-monospace small">{p.latest ?? '—'}</td>
-                    <td>
-                      <Badge color={CLASSIFICATION_COLOR[p.classification]} pill>
-                        {p.classification}
-                      </Badge>
-                    </td>
                     <td className="text-muted small">
                       {p.lastFetchedAt !== null ? relTime(p.lastFetchedAt) : '—'}
                     </td>

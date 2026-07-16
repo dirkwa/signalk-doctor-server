@@ -252,11 +252,21 @@ export type DriftClassification =
   | 'prerelease'
   | 'unknown';
 
+/** One resolved copy of a tracked package at a specific location. */
+export interface DriftLocation {
+  installed: string;
+  classification: DriftClassification;
+}
+
 export interface DriftPackage {
   name: string;
-  installed: string;
+  /** The copy baked into the image (what the server core loads); null when
+   *  the image doesn't carry the package. */
+  image: DriftLocation | null;
+  /** The copy in the data dir's plugin tree, npm-installed as a dependency
+   *  of the user's plugins; null when no data-dir copy exists. */
+  dataDir: DriftLocation | null;
   latest: string | null;
-  classification: DriftClassification;
   lastFetchedAt: string | null;
 }
 

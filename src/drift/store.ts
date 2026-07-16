@@ -1,6 +1,13 @@
 import { open, mkdir, readFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
-import type { DriftFetchError, DriftFetchReason, DriftReport } from './types.js';
+import type {
+  DriftClassification,
+  DriftFetchError,
+  DriftFetchReason,
+  DriftLocation,
+  DriftPackage,
+  DriftReport,
+} from './types.js';
 
 // Resolved at request time so tests can override DOCTOR_DATA between scans
 // (and so an installer can adjust the mount path without rebuilding).
@@ -62,6 +69,53 @@ function isAcceptableReasonOnDisk(value: unknown): value is string {
   return isCurrentReason(value) || (typeof value === 'string' && value in RETIRED_REASON_MAP);
 }
 
+const CLASSIFICATIONS: ReadonlySet<DriftClassification> = new Set([
+  'up-to-date',
+  'patch',
+  'minor',
+  'major',
+  'prerelease',
+  'unknown',
+]);
+
+function strOrNull(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+
+function asLocation(value: unknown): DriftLocation | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as { installed?: unknown; classification?: unknown };
+  if (typeof v.installed !== 'string') return null;
+  return {
+    installed: v.installed,
+    classification: CLASSIFICATIONS.has(v.classification as DriftClassification)
+      ? (v.classification as DriftClassification)
+      : 'unknown',
+  };
+}
+
+/** Migrate one on-disk package entry to the current two-location shape.
+ *  Pre-v0.8 entries carried a single first-hit-wins `installed` version whose
+ *  location (image vs data dir) is unknowable in hindsight — keep the parts
+ *  that stay meaningful offline (latest/etag/lastFetchedAt, which need the
+ *  registry to rebuild) and drop the ambiguous version; the next scan refills
+ *  both locations from purely local container reads. Entries without a name
+ *  are dropped. */
+function migratePackage(value: unknown): DriftPackage | null {
+  if (!value || typeof value !== 'object') return null;
+  const v = value as Record<string, unknown>;
+  if (typeof v.name !== 'string' || v.name.length === 0) return null;
+  const legacy = typeof v.installed === 'string';
+  return {
+    name: v.name,
+    image: legacy ? null : asLocation(v.image),
+    dataDir: legacy ? null : asLocation(v.dataDir),
+    latest: strOrNull(v.latest),
+    etag: strOrNull(v.etag),
+    lastFetchedAt: strOrNull(v.lastFetchedAt),
+  };
+}
+
 function isDriftFetchError(value: unknown): value is DriftFetchError | null {
   if (value === null) return true;
   if (!value || typeof value !== 'object') return false;
@@ -106,6 +160,11 @@ export async function loadDriftReport(): Promise<DriftReport | null> {
       const mapped = RETIRED_REASON_MAP[fetchError.reason];
       if (mapped) fetchError.reason = mapped;
     }
+    // Migrate each package entry to the two-location shape (and validate
+    // entries written in the current shape, dropping malformed ones).
+    parsed.packages = (parsed.packages as unknown[])
+      .map(migratePackage)
+      .filter((p): p is DriftPackage => p !== null);
     return parsed;
   } catch {
     return null;

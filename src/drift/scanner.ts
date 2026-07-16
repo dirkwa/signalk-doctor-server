@@ -3,7 +3,7 @@ import { readInstalledPackages, type InstalledPackage } from './installed-packag
 import { getLatestVersion, type NpmRegistryResult } from './npm-registry.js';
 import { classify } from './classify.js';
 import { loadDriftReport, saveDriftReport } from './store.js';
-import type { DriftPackage, DriftReport } from './types.js';
+import type { DriftLocation, DriftPackage, DriftReport } from './types.js';
 
 const PER_PACKAGE_JITTER_MS = 100;
 
@@ -29,6 +29,14 @@ function priorEntry(report: DriftReport | null, name: string): DriftPackage | un
   return report?.packages.find((p) => p.name === name);
 }
 
+function classifyLocation(installed: string | null, latest: string | null): DriftLocation | null {
+  if (installed === null) return null;
+  return {
+    installed,
+    classification: latest !== null ? classify(installed, latest) : 'unknown',
+  };
+}
+
 function buildPackageEntry(
   installed: InstalledPackage,
   registry: NpmRegistryResult,
@@ -39,21 +47,21 @@ function buildPackageEntry(
     case 'fetched':
       return {
         name: installed.name,
-        installed: installed.version,
+        image: classifyLocation(installed.image, registry.version),
+        dataDir: classifyLocation(installed.dataDir, registry.version),
         latest: registry.version,
-        classification: classify(installed.version, registry.version),
         etag: registry.etag,
         lastFetchedAt: nowIso,
       };
     case 'not-modified': {
       // Latest hasn't changed since prior scan; reuse the prior latest but
-      // reclassify in case the installed version moved.
+      // reclassify in case the installed versions moved.
       const lastLatest = prior?.latest ?? null;
       return {
         name: installed.name,
-        installed: installed.version,
+        image: classifyLocation(installed.image, lastLatest),
+        dataDir: classifyLocation(installed.dataDir, lastLatest),
         latest: lastLatest,
-        classification: lastLatest ? classify(installed.version, lastLatest) : 'unknown',
         etag: registry.etag || (prior?.etag ?? null),
         lastFetchedAt: nowIso,
       };
@@ -61,13 +69,13 @@ function buildPackageEntry(
     case 'offline':
     case 'error':
       // Carry the prior result forward so the UI keeps showing the last good
-      // value; only refresh `installed` (the local truth that doesn't need
-      // internet).
+      // value; only refresh the installed versions (the local truth that
+      // doesn't need internet).
       return {
         name: installed.name,
-        installed: installed.version,
+        image: classifyLocation(installed.image, prior?.latest ?? null),
+        dataDir: classifyLocation(installed.dataDir, prior?.latest ?? null),
         latest: prior?.latest ?? null,
-        classification: prior?.latest ? classify(installed.version, prior.latest) : 'unknown',
         etag: prior?.etag ?? null,
         lastFetchedAt: prior?.lastFetchedAt ?? null,
       };
