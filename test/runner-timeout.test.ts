@@ -26,6 +26,7 @@ function mockAll(overrides: Record<string, () => Promise<ProbeResult>> = {}): vo
     probeSignalkHealth: () => Promise.resolve(ok('signalk-health')),
     probeUpdaterHealth: () => Promise.resolve(ok('updater-health')),
     probeVersionDrift: () => Promise.resolve(ok('version-drift')),
+    probeDependencyDrift: () => Promise.resolve(ok('dependency-drift')),
     probeSnapshots: () => Promise.resolve(ok('snapshots')),
     probeDisk: () => Promise.resolve(ok('disk')),
     probeMemory: () => Promise.resolve(ok('memory')),
@@ -47,6 +48,9 @@ function mockAll(overrides: Record<string, () => Promise<ProbeResult>> = {}): vo
     probeUpdaterHealth: p.probeUpdaterHealth,
   }));
   vi.doMock('../src/probes/version-drift.js', () => ({ probeVersionDrift: p.probeVersionDrift }));
+  vi.doMock('../src/probes/dependency-drift.js', () => ({
+    probeDependencyDrift: p.probeDependencyDrift,
+  }));
   vi.doMock('../src/probes/snapshots.js', () => ({ probeSnapshots: p.probeSnapshots }));
   vi.doMock('../src/probes/disk.js', () => ({ probeDisk: p.probeDisk }));
   vi.doMock('../src/probes/memory.js', () => ({ probeMemory: p.probeMemory }));
@@ -86,7 +90,7 @@ describe('runAllProbes — per-probe timeout', () => {
     // No result is keyed by the function name.
     expect(out.results.some((r) => r.id === 'probePodman')).toBe(false);
     expect(out.summary.unknown).toBe(1);
-    expect(out.summary.ok).toBe(12);
+    expect(out.summary.ok).toBe(13);
   });
 
   it('marks a throwing probe unknown under its registry id (does not reject the run)', async () => {
@@ -99,15 +103,15 @@ describe('runAllProbes — per-probe timeout', () => {
     expect(dbus?.label).toBe('User-instance DBus socket');
     expect(dbus?.message).toBe('boom');
     expect(out.summary.unknown).toBe(1);
-    expect(out.summary.ok).toBe(12);
+    expect(out.summary.ok).toBe(13);
   });
 
-  it('passes fast probes through unchanged (no timeout penalty, all 13 ok)', async () => {
+  it('passes fast probes through unchanged (no timeout penalty, all 14 ok)', async () => {
     mockAll();
     const { runAllProbes } = await import('../src/probes/runner.js');
     const out = await runAllProbes();
-    expect(out.summary.ok).toBe(13);
+    expect(out.summary.ok).toBe(14);
     expect(out.summary.unknown).toBe(0);
-    expect(out.results).toHaveLength(13);
+    expect(out.results).toHaveLength(14);
   });
 });
