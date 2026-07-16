@@ -287,6 +287,107 @@ export function refreshDrift(): Promise<DriftReport> {
   return request<DriftReport>('/drift/refresh', { method: 'POST' });
 }
 
+// ── Data-dir heal ───────────────────────────────────────────
+
+export interface HealTarget {
+  name: string;
+  from: string;
+  latest: string | null;
+}
+
+export interface HealPackageOutcome {
+  name: string;
+  from: string;
+  to: string | null;
+  latest: string | null;
+  outcome: 'updated' | 'range-limited' | 'unchanged';
+}
+
+export type HealResult =
+  | {
+      ok: true;
+      startedAt: string;
+      finishedAt: string;
+      durationMs: number;
+      targets: HealTarget[];
+      exitCode: number | null;
+      outputTail: string;
+      packages: HealPackageOutcome[];
+    }
+  | {
+      ok: false;
+      reason: 'no-report' | 'exec' | 'npm';
+      detail: string;
+      startedAt: string;
+      finishedAt: string;
+      durationMs: number;
+      exitCode?: number;
+      outputTail?: string;
+      packages?: HealPackageOutcome[];
+      /** npm could not be proven stopped; the server kept the operation
+       *  lock so nothing else races it. */
+      lockRetained?: boolean;
+    };
+
+interface HealStartResponse {
+  jobId: string;
+  status: 'running';
+  startedAt: string;
+  reused: boolean;
+}
+
+type HealJobResponse =
+  | { status: 'running'; startedAt: string }
+  | { status: 'done' | 'error'; startedAt: string; finishedAt: string; result: HealResult };
+
+// Per-request deadline for the heal's POST/poll hops. The job does the slow
+// work; each individual request should answer fast, and a hung fetch would
+// otherwise leave the button spinning forever (the poll loop only checks its
+// deadline BETWEEN requests).
+const HEAL_REQUEST_TIMEOUT_MS = 15_000;
+
+/** Run the async heal flow: POST starts the job (202 in <1s so the plugin
+ *  proxy's 15s header watchdog never trips), then poll until it settles.
+ *  Returns the engine's HealResult — including the ok:false shapes, which
+ *  carry per-package outcomes; only transport/timeout problems throw. */
+export async function runDriftHeal(
+  onProgress?: (elapsedSeconds: number) => void,
+): Promise<HealResult> {
+  const timedOut = (): ApiError => {
+    const err: ApiError = new Error(
+      'the update did not finish in time — it may still be running; rescan the Drift tab in a minute',
+    );
+    err.status = 504;
+    return err;
+  };
+  const bounded = async <T>(path: string, init: RequestInit = {}): Promise<T> => {
+    try {
+      return await request<T>(path, {
+        ...init,
+        signal: AbortSignal.timeout(HEAL_REQUEST_TIMEOUT_MS),
+      });
+    } catch (err) {
+      if (
+        err instanceof DOMException &&
+        (err.name === 'TimeoutError' || err.name === 'AbortError')
+      ) {
+        throw timedOut();
+      }
+      throw err;
+    }
+  };
+
+  const started = await bounded<HealStartResponse>('/drift/heal', { method: 'POST' });
+  const deadline = Date.now() + POLL_TIMEOUT_MS;
+  while (Date.now() <= deadline) {
+    const job = await bounded<HealJobResponse>(`/drift/heal/${encodeURIComponent(started.jobId)}`);
+    if (job.status !== 'running') return job.result;
+    onProgress?.(Math.round((Date.now() - new Date(started.startedAt).getTime()) / 1000));
+    await sleep(POLL_INTERVAL_MS);
+  }
+  throw timedOut();
+}
+
 // ── Bug report ──────────────────────────────────────────────
 
 export interface BugReportSuccess {
