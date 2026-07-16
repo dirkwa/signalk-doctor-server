@@ -137,7 +137,12 @@ export async function registerDriftRoutes(
       }
       const result = await explainRunner(packages as string[]);
       if (!result.ok) {
-        reply.code(502);
+        // 500, deliberately NOT 502: the signalk-doctor plugin proxy in
+        // front of this engine answers 502 itself when the engine is
+        // unreachable (e.g. mid-update restart). Field consoles must be
+        // able to tell "the engine answered with an error" (500 + JSON
+        // detail) from "there was no engine to answer" (proxy 502).
+        reply.code(500);
         return { error: result.detail };
       }
       return { explanations: result.explanations };
