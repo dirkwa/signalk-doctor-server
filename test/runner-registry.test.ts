@@ -17,6 +17,7 @@ const EXPECTED_IDS = new Set([
   'signalk-health',
   'updater-health',
   'version-drift',
+  'dependency-drift',
   'snapshots',
   'disk',
   'memory',

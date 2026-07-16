@@ -9,6 +9,7 @@ import { probeMemory } from './memory.js';
 import { probeTimeDrift } from './time-drift.js';
 import { probeSnapshots } from './snapshots.js';
 import { probeVersionDrift } from './version-drift.js';
+import { probeDependencyDrift } from './dependency-drift.js';
 import { probeCgroupDelegation } from './cgroup-delegation.js';
 import { probeStorageType } from './storage-type.js';
 
@@ -37,6 +38,7 @@ const PROBES: ProbeSpec[] = [
   { id: 'signalk-health', label: 'SignalK server HTTP health', run: probeSignalkHealth },
   { id: 'updater-health', label: 'Updater HTTP health', run: probeUpdaterHealth },
   { id: 'version-drift', label: 'Version drift', run: probeVersionDrift },
+  { id: 'dependency-drift', label: 'Dependency drift', run: probeDependencyDrift },
   { id: 'snapshots', label: 'Quadlet snapshots', run: probeSnapshots },
   { id: 'disk', label: 'Disk free on /data', run: probeDisk },
   { id: 'memory', label: 'Free RAM', run: probeMemory },
