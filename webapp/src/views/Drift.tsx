@@ -118,9 +118,11 @@ function dependentLabel(d: PackageDependent): string {
 }
 
 /** The "who holds this back" sentence for a non-updated outcome or a
- *  why?-lookup: names the dependents and their declared ranges, with the
- *  leftover-embedded-server case called out explicitly — that one is
- *  removable, not waiting on anyone. */
+ *  why?-lookup: names the dependents and their declared ranges, then one
+ *  guidance sentence per KIND of holder — plugins (App-Store update), the
+ *  data dir's own package.json pin (edit/remove the entry), and the
+ *  leftover embedded signalk-server (removable, waiting on no one). Mixed
+ *  holders get every applicable sentence, not just the first match. */
 function HeldByNote({
   dependents,
   embeddedServer,
@@ -129,18 +131,36 @@ function HeldByNote({
   embeddedServer: boolean;
 }) {
   if (dependents.length === 0) return null;
+  const rootPin = dependents.some((d) => d.name === 'package.json');
+  const plugins = dependents.filter(
+    (d) => d.name !== 'package.json' && d.name !== 'signalk-server',
+  );
   return (
     <span className="text-muted">
       {' '}
-      — held by <span className="font-monospace">{dependents.map(dependentLabel).join(', ')}</span>
-      {embeddedServer ? (
+      — held by <span className="font-monospace">{dependents.map(dependentLabel).join(', ')}</span>.
+      {plugins.length > 0 && (
         <>
-          . <strong>This includes the leftover embedded signalk-server</strong> from the old
-          bare-metal server-update flow; it is never executed in the container stack. Remove it with{' '}
+          {' '}
+          Update the holding plugin{plugins.length === 1 ? '' : 's'} via the App Store once a
+          release widens the range.
+        </>
+      )}
+      {rootPin && (
+        <>
+          {' '}
+          The <span className="font-monospace">package.json</span> holder is a direct pin in the
+          data dir itself — loosen or remove that entry (<code>npm uninstall &lt;package&gt;</code>{' '}
+          drops it).
+        </>
+      )}
+      {embeddedServer && (
+        <>
+          {' '}
+          <strong>The leftover embedded signalk-server</strong> is a pre-container server-update
+          artifact, never executed in the container stack — remove it with{' '}
           <code>npm uninstall signalk-server</code> in the data dir to free its pins (and disk).
         </>
-      ) : (
-        <> — update the holding plugin via the App Store once a release widens its range.</>
       )}
     </span>
   );

@@ -42,6 +42,7 @@ export type ExplainResult =
 interface RawExplanation {
   name?: unknown;
   version?: unknown;
+  location?: unknown;
   extraneous?: unknown;
   dependents?: unknown;
 }
@@ -57,9 +58,10 @@ function strOrNull(v: unknown): string | null {
 
 /**
  * Parse `npm explain --json` output into per-package explanations. A package
- * name can appear in several entries (hoisted + nested copies); their direct
- * dependents are merged, deduped by dependent name + spec. Returns null when
- * the payload isn't the expected array (the caller reports the raw detail).
+ * name can appear in several entries (hoisted + nested copies); the
+ * top-level hoisted copy wins (see below), and dependents are deduped by
+ * dependent name + spec. Returns null when the payload isn't the expected
+ * array (the caller reports the raw detail).
  */
 export function parseExplainOutput(output: string): PackageExplanation[] | null {
   let parsed: unknown;
@@ -70,47 +72,57 @@ export function parseExplainOutput(output: string): PackageExplanation[] | null 
   }
   if (!Array.isArray(parsed)) return null;
 
-  const byName = new Map<string, PackageExplanation>();
-  // A package is extraneous only when EVERY copy of it is: one required
-  // nested copy means npm keeps the package around, whatever a hoisted
-  // duplicate's flag says.
-  const allCopiesExtraneous = new Map<string, boolean>();
+  const copiesByName = new Map<string, RawExplanation[]>();
   for (const raw of parsed as RawExplanation[]) {
     if (!raw || typeof raw.name !== 'string' || raw.name.length === 0) continue;
-    const entry = byName.get(raw.name) ?? {
-      name: raw.name,
-      version: strOrNull(raw.version),
+    const list = copiesByName.get(raw.name) ?? [];
+    list.push(raw);
+    copiesByName.set(raw.name, list);
+  }
+
+  const out: PackageExplanation[] = [];
+  for (const [name, copies] of copiesByName) {
+    // The drift scan reads exactly the TOP-LEVEL hoisted copy
+    // (<dataDir>/node_modules/<name>), so when several copies exist at
+    // different resolved versions, that copy is the one the question is
+    // about: its version, its dependents (a nested copy's holder does not
+    // constrain the hoisted one), and its extraneous flag (npm sweeps an
+    // extraneous hoisted copy even while a required nested one stays).
+    // Without a top-level copy, fall back to merging all copies.
+    const topLevel = copies.find((c) => c.location === `node_modules/${name}`);
+    const relevant = topLevel !== undefined ? [topLevel] : copies;
+
+    const entry: PackageExplanation = {
+      name,
+      version: strOrNull(relevant[0]?.version),
       dependents: [],
       extraneous: false,
       heldByEmbeddedServer: false,
     };
-    allCopiesExtraneous.set(
-      raw.name,
-      (allCopiesExtraneous.get(raw.name) ?? true) && raw.extraneous === true,
-    );
-    const rawDependents = Array.isArray(raw.dependents) ? (raw.dependents as RawDependent[]) : [];
-    for (const d of rawDependents) {
-      if (typeof d?.spec !== 'string') continue;
-      // The tree root (the data dir's package.json) explains itself without
-      // a `from.name`.
-      const depName = typeof d.from?.name === 'string' ? d.from.name : 'package.json';
-      const dependent: PackageDependent = {
-        name: depName,
-        version: strOrNull(d.from?.version),
-        spec: d.spec,
-      };
-      if (!entry.dependents.some((e) => e.name === dependent.name && e.spec === dependent.spec)) {
-        entry.dependents.push(dependent);
+    let allCopiesExtraneous = true;
+    for (const raw of relevant) {
+      allCopiesExtraneous = allCopiesExtraneous && raw.extraneous === true;
+      const rawDependents = Array.isArray(raw.dependents) ? (raw.dependents as RawDependent[]) : [];
+      for (const d of rawDependents) {
+        if (typeof d?.spec !== 'string') continue;
+        // The tree root (the data dir's package.json) explains itself
+        // without a `from.name`.
+        const depName = typeof d.from?.name === 'string' ? d.from.name : 'package.json';
+        const dependent: PackageDependent = {
+          name: depName,
+          version: strOrNull(d.from?.version),
+          spec: d.spec,
+        };
+        if (!entry.dependents.some((e) => e.name === dependent.name && e.spec === dependent.spec)) {
+          entry.dependents.push(dependent);
+        }
+        if (depName === 'signalk-server') entry.heldByEmbeddedServer = true;
       }
-      if (depName === 'signalk-server') entry.heldByEmbeddedServer = true;
     }
-    byName.set(raw.name, entry);
+    entry.extraneous = entry.dependents.length === 0 && allCopiesExtraneous;
+    out.push(entry);
   }
-  for (const entry of byName.values()) {
-    entry.extraneous =
-      entry.dependents.length === 0 && allCopiesExtraneous.get(entry.name) === true;
-  }
-  return [...byName.values()];
+  return out;
 }
 
 export type ExplainExec = (

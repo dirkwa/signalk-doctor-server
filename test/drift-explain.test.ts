@@ -106,10 +106,40 @@ describe('parseExplainOutput', () => {
     expect(rooted?.dependents).toEqual([{ name: 'package.json', version: null, spec: '^4.0.0' }]);
   });
 
-  it('merges duplicate entries for the same package (hoisted + nested copies)', () => {
+  it('prefers the top-level hoisted copy when copies at different versions exist', () => {
+    // The drift scan reads exactly the top-level copy, so the explanation
+    // must describe THAT copy: its version and its dependents. A nested
+    // copy's holder does not constrain the hoisted one and must not leak
+    // into the answer.
     const nestedCopy = {
       ...PLUGIN_HELD_ENTRY,
+      version: '5.0.0',
       location: 'node_modules/other/node_modules/@signalk/streams',
+      dependents: [
+        {
+          type: 'prod',
+          name: '@signalk/streams',
+          spec: '~5.0.0',
+          from: { name: 'signalk-other-plugin', version: '0.9.0' },
+        },
+      ],
+    };
+    const out = parseExplainOutput(JSON.stringify([nestedCopy, PLUGIN_HELD_ENTRY]));
+    expect(out).toHaveLength(1);
+    expect(out?.[0]?.version).toBe('5.1.4');
+    expect(out?.[0]?.dependents).toEqual([
+      { name: 'signalk-some-plugin', version: '1.2.3', spec: '^5.0.0' },
+    ]);
+  });
+
+  it('merges all copies only when no top-level copy exists', () => {
+    const nestedA = {
+      ...PLUGIN_HELD_ENTRY,
+      location: 'node_modules/a/node_modules/@signalk/streams',
+    };
+    const nestedB = {
+      ...PLUGIN_HELD_ENTRY,
+      location: 'node_modules/b/node_modules/@signalk/streams',
       dependents: [
         {
           type: 'prod',
@@ -119,7 +149,7 @@ describe('parseExplainOutput', () => {
         },
       ],
     };
-    const out = parseExplainOutput(JSON.stringify([PLUGIN_HELD_ENTRY, nestedCopy]));
+    const out = parseExplainOutput(JSON.stringify([nestedA, nestedB]));
     expect(out).toHaveLength(1);
     expect(out?.[0]?.dependents).toEqual([
       { name: 'signalk-some-plugin', version: '1.2.3', spec: '^5.0.0' },
