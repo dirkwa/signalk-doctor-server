@@ -97,7 +97,6 @@ describe('readInstalledPackages', () => {
       '@signalk/server-api': '2.25.0',
       '@signalk/streams': '6.6.0',
     });
-    // Nothing lives in the data dir in this layout.
     expect(res.installed.packages.every((p) => p.dataDir === null)).toBe(true);
   });
 
