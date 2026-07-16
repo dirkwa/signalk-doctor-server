@@ -294,13 +294,18 @@ export async function readInstalledPackages(
     // Each location is looked up independently so a copy in the user's
     // plugin tree can never shadow (or be shadowed by) the image's copy —
     // the two drift for different reasons and heal through different paths.
-    const dataDir = await readVersionAt(target, dataDirCandidatePaths(name));
-    const image = await readVersionAt(target, imageCandidatePaths(name));
+    const [dataDir, image] = await Promise.all([
+      readVersionAt(target, dataDirCandidatePaths(name)),
+      readVersionAt(target, imageCandidatePaths(name)),
+    ]);
     if (dataDir.kind === 'error' || image.kind === 'error') {
       // The container is reachable (probe succeeded), so a per-path runtime
-      // error is usually a transient glitch on one package — omit it and keep
-      // going for partial success. But remember the first one: if it turns out
-      // EVERY read failed (e.g. a permission/socket fault that the inspect
+      // error is usually a transient glitch on one package — omit the whole
+      // package and keep going for partial success. Deliberately do NOT keep
+      // a location that resolved while its sibling errored: null encodes
+      // "absent from this location", and reporting an errored read as absence
+      // would lie to the operator. But remember the first error: if it turns
+      // out EVERY read failed (e.g. a permission/socket fault that the inspect
       // probe didn't hit), we must not return an empty ok:[] that looks like a
       // healthy image with no packages and zeroes the prior data.
       const detail = dataDir.kind === 'error' ? dataDir.detail : null;

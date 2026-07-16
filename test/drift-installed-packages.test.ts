@@ -254,6 +254,48 @@ describe('readInstalledPackages', () => {
     ]);
   });
 
+  it('omits the whole package when one location errors while the other resolves', async () => {
+    // server-api's image copy reads fine but its data-dir read hits a real
+    // (non-not-found) error. Reporting the found half would render the
+    // errored location as null — and null means "absent from this location",
+    // so a transient read error would masquerade as absence. The package is
+    // deliberately omitted for this scan instead; unaffected packages still
+    // report, and the error is remembered for the all-reads-failed guard.
+    const permErr: CategorizedError = {
+      kind: 'permission',
+      userMessage: 'Permission denied. Check container socket and mount permissions.',
+      raw: 'EACCES',
+    };
+    const canboatPath = `${APP}/node_modules/@canboat/canboatjs/package.json`;
+    const serverApiImagePath = `${NESTED}/node_modules/@signalk/server-api/package.json`;
+    const serverApiDataPath = `${DATA}/node_modules/@signalk/server-api/package.json`;
+    const probe: ContainerProbe = {
+      probe: () => Promise.resolve({ ok: true, value: Buffer.alloc(0) }),
+      fetch: (path) => {
+        if (path === canboatPath) {
+          return Promise.resolve({
+            ok: true,
+            value: ustarTar(pkgJson('@canboat/canboatjs', '3.20.0')),
+          });
+        }
+        if (path === serverApiImagePath) {
+          return Promise.resolve({
+            ok: true,
+            value: ustarTar(pkgJson('@signalk/server-api', '2.25.0')),
+          });
+        }
+        if (path === serverApiDataPath) return Promise.resolve({ ok: false, error: permErr });
+        return Promise.resolve({ ok: false, error: NOT_FOUND });
+      },
+    };
+    const res = await readInstalledPackages(probe);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.installed.packages).toEqual([
+      { name: '@canboat/canboatjs', image: '3.20.0', dataDir: null },
+    ]);
+  });
+
   it('returns runtime — never ok:[] — when the container is reachable but every read errors', async () => {
     // probe() succeeds (container present), but a permission/socket fault makes
     // EVERY getArchive fail with a non-not-found error. The inspect probe can't
