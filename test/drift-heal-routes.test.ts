@@ -6,7 +6,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { createServer } from '../src/server.js';
 import { __resetTokenCacheForTests } from '../src/auth.js';
 import { __resetHealJobsForTests, startHealJob, getHealJob } from '../src/drift/heal-jobs.js';
-import { registerDriftRoutes, type HealRunner } from '../src/routes/drift.js';
+import { registerDriftRoutes, type ExplainRunner, type HealRunner } from '../src/routes/drift.js';
 import type { DriftScheduler } from '../src/drift/scheduler.js';
 import type { HealResult } from '../src/drift/heal.js';
 
@@ -25,12 +25,15 @@ async function pollJobUntilSettled(
   }
 }
 
-/** Bare app with just the drift routes and a controllable heal runner —
- *  the seam for exercising the route's reuse/lock contract. */
-async function bareApp(runner: HealRunner): Promise<FastifyInstance> {
+/** Bare app with just the drift routes and controllable runners — the seam
+ *  for exercising the route contracts. */
+async function bareApp(
+  runner: HealRunner,
+  explainRunner?: ExplainRunner,
+): Promise<FastifyInstance> {
   const app = Fastify();
   const scheduler = { refreshNow: () => Promise.resolve() } as unknown as DriftScheduler;
-  await registerDriftRoutes(app, scheduler, runner);
+  await registerDriftRoutes(app, scheduler, runner, explainRunner);
   return app;
 }
 
@@ -215,6 +218,78 @@ describe('drift heal routes', () => {
         headers: { authorization: 'Bearer sekret' },
       });
       expect(next.statusCode).toBe(409);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('POST /api/drift/explain requires token, validates body, passes names through', async () => {
+    let received: string[] = [];
+    const app = await bareApp(
+      () => Promise.resolve(okResult()),
+      (names) => {
+        received = names;
+        return Promise.resolve({
+          ok: true,
+          explanations: [
+            {
+              name: names[0] ?? '',
+              version: '5.1.4',
+              dependents: [{ name: 'signalk-some-plugin', version: '1.2.3', spec: '^5.0.0' }],
+              extraneous: false,
+              heldByEmbeddedServer: false,
+            },
+          ],
+        });
+      },
+    );
+    try {
+      const noToken = await app.inject({
+        method: 'POST',
+        url: '/api/drift/explain',
+        payload: { packages: ['@signalk/streams'] },
+      });
+      expect(noToken.statusCode).toBe(401);
+
+      const badBody = await app.inject({
+        method: 'POST',
+        url: '/api/drift/explain',
+        headers: { authorization: 'Bearer sekret' },
+        payload: { packages: ['not a package name!'] },
+      });
+      expect(badBody.statusCode).toBe(400);
+
+      const good = await app.inject({
+        method: 'POST',
+        url: '/api/drift/explain',
+        headers: { authorization: 'Bearer sekret' },
+        payload: { packages: ['@signalk/streams'] },
+      });
+      expect(good.statusCode).toBe(200);
+      expect(received).toEqual(['@signalk/streams']);
+      const body = good.json() as {
+        explanations: Array<{ name: string; dependents: Array<{ name: string }> }>;
+      };
+      expect(body.explanations[0]?.dependents[0]?.name).toBe('signalk-some-plugin');
+    } finally {
+      await app.close();
+    }
+  });
+
+  it('POST /api/drift/explain surfaces runner failure as 502', async () => {
+    const app = await bareApp(
+      () => Promise.resolve(okResult()),
+      () => Promise.resolve({ ok: false, detail: 'unreachable: no socket' }),
+    );
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/drift/explain',
+        headers: { authorization: 'Bearer sekret' },
+        payload: { packages: ['@signalk/streams'] },
+      });
+      expect(res.statusCode).toBe(502);
+      expect((res.json() as { error: string }).error).toMatch(/no socket/);
     } finally {
       await app.close();
     }

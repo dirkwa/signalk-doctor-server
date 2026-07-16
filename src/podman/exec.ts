@@ -46,8 +46,17 @@ class TailCollector extends Writable {
 export interface ExecSuccess {
   ok: true;
   exitCode: number;
-  /** Combined stdout+stderr, tail-truncated to MAX_OUTPUT_BYTES. */
+  /** stdout — with stderr interleaved unless `separateStderr` was set.
+   *  Tail-truncated to MAX_OUTPUT_BYTES. */
   output: string;
+  /** stderr, only when the call asked for `separateStderr` (callers that
+   *  parse stdout as JSON must not have npm warnings mixed in). */
+  stderr?: string;
+}
+
+export interface ExecOptions {
+  /** Collect stderr separately instead of interleaving it into `output`. */
+  separateStderr?: boolean;
 }
 
 export interface ExecFailure {
@@ -85,6 +94,7 @@ export async function execInContainer(
   cmd: string[],
   workingDir: string,
   timeoutMs: number,
+  options: ExecOptions = {},
 ): Promise<ExecResult> {
   const rt = await resolveRuntime();
   if (!rt) {
@@ -128,13 +138,23 @@ export async function execInContainer(
   const stream = startedStream.value;
 
   const collector = new TailCollector();
-  // Both stdout and stderr land in one tail-bounded collector — the
-  // operator reads them interleaved the same way a terminal would show them.
+  // Default: stdout and stderr land in ONE tail-bounded collector — the
+  // operator reads them interleaved the same way a terminal would show
+  // them. Callers that parse stdout (npm --json) split stderr off instead,
+  // so a stray npm warning can't corrupt the payload.
+  const errCollector = options.separateStderr === true ? new TailCollector() : collector;
   (rt.client.modem as { demuxStream: (s: Readable, o: Writable, e: Writable) => void }).demuxStream(
     stream,
     collector,
-    collector,
+    errCollector,
   );
+
+  const success = (exitCode: number): ExecSuccess => ({
+    ok: true,
+    exitCode,
+    output: collector.text(),
+    ...(options.separateStderr === true ? { stderr: errCollector.text() } : {}),
+  });
 
   const finished = await new Promise<'end' | 'timeout' | Error>((resolve) => {
     const timer = setTimeout(() => {
@@ -165,7 +185,7 @@ export async function execInContainer(
     const grace = lingerGraceMs();
     const lingered = await waitForExit(exec, grace, 5000);
     if (lingered.kind === 'exit') {
-      return { ok: true, exitCode: lingered.code, output: collector.text() };
+      return success(lingered.code);
     }
     if (lingered.kind === 'error') {
       // CC-6: the linger inspection failed with a real categorized error —
@@ -225,7 +245,7 @@ export async function execInContainer(
     };
   }
 
-  return { ok: true, exitCode: settled.code, output: collector.text() };
+  return success(settled.code);
 }
 
 // How long a timed-out command may linger before we give up waiting for

@@ -295,12 +295,37 @@ export interface HealTarget {
   latest: string | null;
 }
 
+/** One direct dependent of a package: who requires it, with what range. */
+export interface PackageDependent {
+  name: string;
+  version: string | null;
+  spec: string;
+}
+
+export interface PackageExplanation {
+  name: string;
+  version: string | null;
+  dependents: PackageDependent[];
+  extraneous: boolean;
+  heldByEmbeddedServer: boolean;
+}
+
 export interface HealPackageOutcome {
   name: string;
   from: string;
   to: string | null;
   latest: string | null;
   outcome: 'updated' | 'range-limited' | 'unchanged';
+  heldBy?: PackageDependent[];
+  heldByEmbeddedServer?: boolean;
+  wasExtraneous?: boolean;
+}
+
+export function explainDrift(packages: string[]): Promise<{ explanations: PackageExplanation[] }> {
+  return request<{ explanations: PackageExplanation[] }>('/drift/explain', {
+    method: 'POST',
+    body: JSON.stringify({ packages }),
+  });
 }
 
 export type HealResult =

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, Badge, Button, Card, CardBody, CardHeader, Spinner, Table } from 'reactstrap';
 import {
+  explainDrift,
   fmtTime,
   getDrift,
   refreshDrift,
@@ -13,6 +14,8 @@ import {
   type DriftPackage,
   type DriftReport,
   type HealResult,
+  type PackageDependent,
+  type PackageExplanation,
 } from '../api';
 import { ConfirmModal } from '../components/ConfirmModal';
 
@@ -109,6 +112,40 @@ const OUTCOME_PRESENTATION = {
   unchanged: { color: 'secondary', label: 'unchanged' },
 } as const;
 
+function dependentLabel(d: PackageDependent): string {
+  const version = d.version !== null ? `@${d.version}` : '';
+  return `${d.name}${version} (${d.spec})`;
+}
+
+/** The "who holds this back" sentence for a non-updated outcome or a
+ *  why?-lookup: names the dependents and their declared ranges, with the
+ *  leftover-embedded-server case called out explicitly — that one is
+ *  removable, not waiting on anyone. */
+function HeldByNote({
+  dependents,
+  embeddedServer,
+}: {
+  dependents: PackageDependent[];
+  embeddedServer: boolean;
+}) {
+  if (dependents.length === 0) return null;
+  return (
+    <span className="text-muted">
+      {' '}
+      — held by <span className="font-monospace">{dependents.map(dependentLabel).join(', ')}</span>
+      {embeddedServer ? (
+        <>
+          . <strong>This includes the leftover embedded signalk-server</strong> from the old
+          bare-metal server-update flow; it is never executed in the container stack. Remove it with{' '}
+          <code>npm uninstall signalk-server</code> in the data dir to free its pins (and disk).
+        </>
+      ) : (
+        <> — update the holding plugin via the App Store once a release widens its range.</>
+      )}
+    </span>
+  );
+}
+
 /** What the heal actually did, package by package, with the honest
  *  residue story: range-limited copies wait on a plugin author's range
  *  bump, not on the operator. */
@@ -149,19 +186,24 @@ function HealOutcome({ result, onDismiss }: { result: HealResult; onDismiss: () 
               </Badge>{' '}
               {p.outcome === 'updated' ? (
                 <span className="font-monospace">
-                  {p.from} → {p.to ?? 'hoisted away'}
+                  {p.from} → {p.to ?? (p.wasExtraneous ? 'removed (leftover)' : 'hoisted away')}
                 </span>
               ) : (
                 <>
                   <span className="font-monospace">stays {p.from}</span>
-                  {p.outcome === 'range-limited' && (
-                    <span className="text-muted">
-                      {' '}
-                      — newest the plugins&apos; declared ranges allow (latest is{' '}
-                      <span className="font-monospace">{p.latest ?? '?'}</span>); waiting on a
-                      plugin-author range bump, nothing to fix here
-                    </span>
-                  )}
+                  {p.outcome === 'range-limited' &&
+                    (p.heldBy && p.heldBy.length > 0 ? (
+                      <HeldByNote
+                        dependents={p.heldBy}
+                        embeddedServer={p.heldByEmbeddedServer === true}
+                      />
+                    ) : (
+                      <span className="text-muted">
+                        {' '}
+                        — newest the plugins&apos; declared ranges allow (latest is{' '}
+                        <span className="font-monospace">{p.latest ?? '?'}</span>)
+                      </span>
+                    ))}
                 </>
               )}
             </li>
@@ -185,8 +227,19 @@ function HealOutcome({ result, onDismiss }: { result: HealResult; onDismiss: () 
 }
 
 /** Version + classification badge for one location; a plain dash when the
- *  package has no copy at that location. */
-function LocationCell({ location }: { location: DriftLocation | null }) {
+ *  package has no copy at that location. Only user-install cells ever get
+ *  `onWhy`: the image column's drift has exactly one remedy (a newer
+ *  image), so a dependents lookup would answer a question nobody can act
+ *  on there. */
+function LocationCell({
+  location,
+  onWhy,
+  whyBusy,
+}: {
+  location: DriftLocation | null;
+  onWhy?: () => void;
+  whyBusy?: boolean;
+}) {
   if (location === null) {
     return <td className="text-muted small">—</td>;
   }
@@ -196,6 +249,17 @@ function LocationCell({ location }: { location: DriftLocation | null }) {
       <Badge color={CLASSIFICATION_COLOR[location.classification]} pill>
         {location.classification}
       </Badge>
+      {onWhy && (
+        <Button
+          color="link"
+          size="sm"
+          className="p-0 ms-2 align-baseline"
+          onClick={onWhy}
+          disabled={whyBusy === true}
+        >
+          {whyBusy === true ? <Spinner size="sm" /> : 'why?'}
+        </Button>
+      )}
     </td>
   );
 }
@@ -210,6 +274,14 @@ export function Drift() {
   const [healElapsed, setHealElapsed] = useState(0);
   const [healResult, setHealResult] = useState<HealResult | null>(null);
   const [healErr, setHealErr] = useState<string | null>(null);
+  const [whyBusy, setWhyBusy] = useState<string | null>(null);
+  const [why, setWhy] = useState<{ name: string; explanation: PackageExplanation | null } | null>(
+    null,
+  );
+  const [whyErr, setWhyErr] = useState<string | null>(null);
+  // Monotonic lookup id: a why? click on package B must not have its result
+  // (or spinner) clobbered by package A's slower, earlier response.
+  const whySeq = useRef(0);
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -278,6 +350,23 @@ export function Drift() {
       }
     } finally {
       setHealBusy(false);
+    }
+  }
+
+  async function lookupWhy(name: string): Promise<void> {
+    const seq = ++whySeq.current;
+    setWhyBusy(name);
+    setWhyErr(null);
+    setWhy(null);
+    try {
+      const res = await explainDrift([name]);
+      if (seq !== whySeq.current) return; // superseded by a newer lookup
+      setWhy({ name, explanation: res.explanations.find((e) => e.name === name) ?? null });
+    } catch (err) {
+      if (seq !== whySeq.current) return;
+      setWhyErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      if (seq === whySeq.current) setWhyBusy(null);
     }
   }
 
@@ -390,6 +479,42 @@ export function Drift() {
         <HealOutcome result={healResult} onDismiss={() => setHealResult(null)} />
       )}
 
+      {whyErr !== null && (
+        <Alert color="danger" className="mb-3" toggle={() => setWhyErr(null)}>
+          <strong>Could not look up dependents.</strong>
+          <div className="small mt-1">{whyErr}</div>
+        </Alert>
+      )}
+
+      {why !== null && (
+        <Alert color="info" className="mb-3" toggle={() => setWhy(null)}>
+          <h6 className="alert-heading mb-2">
+            Why is <span className="font-monospace">{why.name}</span> held back?
+          </h6>
+          {why.explanation === null ? (
+            <p className="mb-0 small">
+              npm returned no explanation — the package may no longer be installed; rescan to
+              refresh the table.
+            </p>
+          ) : why.explanation.extraneous ? (
+            <p className="mb-0 small">
+              Nothing depends on it — the copy is extraneous, and npm sweeps extraneous packages on
+              the next update run.
+            </p>
+          ) : why.explanation.dependents.length === 0 ? (
+            <p className="mb-0 small">npm reported no direct dependents for this package.</p>
+          ) : (
+            <p className="mb-0 small">
+              Installed <span className="font-monospace">{why.explanation.version ?? '?'}</span>
+              <HeldByNote
+                dependents={why.explanation.dependents}
+                embeddedServer={why.explanation.heldByEmbeddedServer}
+              />
+            </p>
+          )}
+        </Alert>
+      )}
+
       <Card>
         <CardHeader className="d-flex justify-content-between align-items-center">
           <strong>Packages</strong>
@@ -441,7 +566,11 @@ export function Drift() {
                   <tr key={p.name}>
                     <td className="font-monospace small">{p.name}</td>
                     <LocationCell location={p.image} />
-                    <LocationCell location={p.dataDir} />
+                    <LocationCell
+                      location={p.dataDir}
+                      onWhy={isHealable(p) ? () => void lookupWhy(p.name) : undefined}
+                      whyBusy={whyBusy === p.name}
+                    />
                     <td className="font-monospace small">{p.latest ?? '—'}</td>
                     <td className="text-muted small">
                       {p.lastFetchedAt !== null ? relTime(p.lastFetchedAt) : '—'}

@@ -1,6 +1,7 @@
 import { loadDriftReport } from './store.js';
 import { dataDirRoot } from './installed-packages.js';
-import { execInContainer, type ExecResult } from '../podman/exec.js';
+import { execInContainer, type ExecOptions, type ExecResult } from '../podman/exec.js';
+import { explainPackages, type PackageDependent, type PackageExplanation } from './explain.js';
 import type { DriftPackage, DriftReport } from './types.js';
 
 const TARGET_CONTAINER = 'signalk-server';
@@ -34,6 +35,20 @@ export interface HealPackageOutcome {
    *  plugin-author fix, not an operator problem); 'unchanged' — unchanged
    *  for any other reason (e.g. offline rescan carried the old state). */
   outcome: 'updated' | 'range-limited' | 'unchanged';
+  /** Direct dependents (name@version + declared range), from `npm explain`
+   *  run before the update. Attached to non-updated outcomes so the
+   *  operator sees WHO holds the package back. Absent when the explain
+   *  pass failed (attribution is best-effort). */
+  heldBy?: PackageDependent[];
+  /** A dependent is the leftover embedded `signalk-server` from the
+   *  pre-container appstore server-update flow — removable in the
+   *  container stack, where the running server always comes from the
+   *  image. */
+  heldByEmbeddedServer?: boolean;
+  /** Pre-update, nothing depended on this copy; any npm reify sweeps such
+   *  leftovers, so a `to: null` outcome here means "removed dead weight",
+   *  not "hoisted elsewhere". */
+  wasExtraneous?: boolean;
 }
 
 export interface HealSuccess {
@@ -100,7 +115,21 @@ function outcomeFor(
   target: HealTarget,
   after: DriftReport | null,
   npmSucceeded: boolean,
+  explanation: PackageExplanation | undefined,
 ): HealPackageOutcome {
+  // Attribution from the pre-update explain pass, best-effort. `held` only
+  // makes sense on outcomes that DIDN'T move — attaching dependents to an
+  // updated entry would imply they hold something back. `swept` rides on
+  // every outcome: it is what turns an updated `to: null` into "removed
+  // leftover" rather than "hoisted away".
+  const held =
+    explanation !== undefined && explanation.dependents.length > 0
+      ? {
+          heldBy: explanation.dependents,
+          ...(explanation.heldByEmbeddedServer ? { heldByEmbeddedServer: true } : {}),
+        }
+      : {};
+  const swept = explanation?.extraneous ? { wasExtraneous: true } : {};
   const pkg = findPackage(after, target.name);
   if (pkg === undefined) {
     // No post-state for this package (report missing, or the rescan
@@ -112,18 +141,20 @@ function outcomeFor(
       to: target.from,
       latest: target.latest,
       outcome: 'unchanged',
+      ...held,
+      ...swept,
     };
   }
   const to = pkg.dataDir?.installed ?? null;
   const latest = pkg.latest ?? target.latest;
   if (to !== null && to !== target.from) {
-    return { name: target.name, from: target.from, to, latest, outcome: 'updated' };
+    return { name: target.name, from: target.from, to, latest, outcome: 'updated', ...swept };
   }
   if (to === null) {
-    // The package WAS rescanned and its data-dir copy is gone — npm dedupe
-    // decided the plugin can use a hoisted/parent copy. That's an update
-    // in effect.
-    return { name: target.name, from: target.from, to, latest, outcome: 'updated' };
+    // The package WAS rescanned and its data-dir copy is gone — either npm
+    // dedupe decided the plugin can use a hoisted/parent copy, or (with
+    // wasExtraneous) the reify swept a leftover nothing depended on.
+    return { name: target.name, from: target.from, to, latest, outcome: 'updated', ...swept };
   }
   // 'range-limited' is a claim about the plugins' declared ranges, and it is
   // only provable when npm processed every named package (exit 0) AND the
@@ -139,6 +170,8 @@ function outcomeFor(
     to,
     latest,
     outcome: npmSucceeded && stillBehind ? 'range-limited' : 'unchanged',
+    ...held,
+    ...swept,
   };
 }
 
@@ -149,7 +182,12 @@ function outcomeFor(
  *  must wire the real scanner explicitly. */
 export interface HealDeps {
   loadReport: () => Promise<DriftReport | null>;
-  exec: (cmd: string[], workingDir: string, timeoutMs: number) => Promise<ExecResult>;
+  exec: (
+    cmd: string[],
+    workingDir: string,
+    timeoutMs: number,
+    options?: ExecOptions,
+  ) => Promise<ExecResult>;
   /** Re-scan drift after the update so outcomes reflect reality (the
    *  installed side of the scan is a local container read — works offline). */
   rescan: () => Promise<void>;
@@ -162,8 +200,8 @@ function withDefaults(deps: HealRunDeps): HealDeps {
     loadReport: deps.loadReport ?? loadDriftReport,
     exec:
       deps.exec ??
-      ((cmd, workingDir, timeoutMs) =>
-        execInContainer(TARGET_CONTAINER, cmd, workingDir, timeoutMs)),
+      ((cmd, workingDir, timeoutMs, options) =>
+        execInContainer(TARGET_CONTAINER, cmd, workingDir, timeoutMs, options)),
     rescan: deps.rescan,
   };
 }
@@ -214,6 +252,19 @@ export async function runDataDirHeal(runDeps: HealRunDeps): Promise<HealResult> 
     };
   }
 
+  // Attribution pass BEFORE the update: who depends on each target, with
+  // what range. Dependents don't change during `npm update` (only resolved
+  // versions do), so the pre-state attribution stays valid for whatever
+  // outcome each target ends with. Best-effort — a failed explain costs
+  // the outcome labels their heldBy detail, never the heal.
+  const explainResult = await explainPackages(
+    targets.map((t) => t.name),
+    deps.exec,
+  );
+  const explanations = new Map<string, PackageExplanation>(
+    explainResult.ok ? explainResult.explanations.map((e) => [e.name, e]) : [],
+  );
+
   const cmd = [
     'npm',
     'update',
@@ -248,7 +299,7 @@ export async function runDataDirHeal(runDeps: HealRunDeps): Promise<HealResult> 
     try {
       await deps.rescan();
       const afterFailed = await deps.loadReport();
-      packages = targets.map((t) => outcomeFor(t, afterFailed, false));
+      packages = targets.map((t) => outcomeFor(t, afterFailed, false, explanations.get(t.name)));
     } catch {
       packages = undefined;
     }
@@ -268,7 +319,9 @@ export async function runDataDirHeal(runDeps: HealRunDeps): Promise<HealResult> 
   // actually on disk now.
   await deps.rescan();
   const after = await deps.loadReport();
-  const packages = targets.map((t) => outcomeFor(t, after, execResult.exitCode === 0));
+  const packages = targets.map((t) =>
+    outcomeFor(t, after, execResult.exitCode === 0, explanations.get(t.name)),
+  );
 
   if (execResult.exitCode !== 0) {
     return {

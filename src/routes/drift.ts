@@ -5,9 +5,16 @@ import { loadDriftReport } from '../drift/store.js';
 import type { DriftReport } from '../drift/types.js';
 import { runDataDirHeal, type HealResult, type HealRunDeps } from '../drift/heal.js';
 import { findRunningHealJob, getHealJob, startHealJob } from '../drift/heal-jobs.js';
+import { explainPackages, type ExplainResult } from '../drift/explain.js';
 import { acquireMutex, readLock, MutexBusyError } from '../mutex.js';
 
 export type HealRunner = (deps: HealRunDeps) => Promise<HealResult>;
+export type ExplainRunner = (names: string[]) => Promise<ExplainResult>;
+
+// npm package name (optionally scoped). Cmd goes through the exec API as an
+// argv array — no shell — so this is shape validation, not escaping.
+const PACKAGE_NAME_RE = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+const MAX_EXPLAIN_PACKAGES = 16;
 
 function emptyReport(): DriftReport {
   return {
@@ -23,9 +30,10 @@ function emptyReport(): DriftReport {
 export async function registerDriftRoutes(
   app: FastifyInstance,
   scheduler: DriftScheduler,
-  // Injectable for route tests (a controllable runner); production uses the
+  // Injectable for route tests (controllable runners); production uses the
   // real engine.
   healRunner: HealRunner = runDataDirHeal,
+  explainRunner: ExplainRunner = (names) => explainPackages(names),
 ): Promise<void> {
   app.get('/api/drift', async () => {
     return (await loadDriftReport()) ?? emptyReport();
@@ -104,6 +112,37 @@ export async function registerDriftRoutes(
     reply.code(202);
     return started;
   });
+
+  // Ask npm who depends on the named data-dir packages (dependents + their
+  // declared ranges) — the "why is this held back?" behind a drifting row.
+  // npm explain only reads the local tree, so this answers synchronously,
+  // well inside the plugin proxy's 15s header watchdog. Token-gated: the
+  // response is read-only, but the call execs a process inside the
+  // signalk-server container.
+  app.post<{ Body: { packages?: unknown } }>(
+    '/api/drift/explain',
+    { preHandler: requireToken },
+    async (req, reply) => {
+      const packages = req.body?.packages;
+      if (
+        !Array.isArray(packages) ||
+        packages.length === 0 ||
+        packages.length > MAX_EXPLAIN_PACKAGES ||
+        !packages.every((p) => typeof p === 'string' && PACKAGE_NAME_RE.test(p))
+      ) {
+        reply.code(400);
+        return {
+          error: `body must be { packages: string[] } of 1–${MAX_EXPLAIN_PACKAGES} npm package names`,
+        };
+      }
+      const result = await explainRunner(packages as string[]);
+      if (!result.ok) {
+        reply.code(502);
+        return { error: result.detail };
+      }
+      return { explanations: result.explanations };
+    },
+  );
 
   // Read-only job status — unauthenticated per CC-2; the random jobId is
   // the capability.
