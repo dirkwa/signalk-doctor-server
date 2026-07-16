@@ -196,11 +196,7 @@ export function getCheckUpdate(): Promise<CheckUpdateResponse> {
 export type InstallerArtifactKind = 'host-script' | 'quadlet-template' | 'detect-script';
 
 export type InstallerArtifactStatus =
-  | 'updated'
-  | 'unchanged'
-  | 'mount-missing'
-  | 'fetch-failed'
-  | 'write-failed';
+  'updated' | 'unchanged' | 'mount-missing' | 'fetch-failed' | 'write-failed';
 
 export interface InstallerStatusArtifact {
   id: string;
@@ -245,12 +241,7 @@ export function refreshInstaller(): Promise<InstallerRefreshResponse> {
 // ── Drift report ────────────────────────────────────────────
 
 export type DriftClassification =
-  | 'up-to-date'
-  | 'patch'
-  | 'minor'
-  | 'major'
-  | 'prerelease'
-  | 'unknown';
+  'up-to-date' | 'patch' | 'minor' | 'major' | 'prerelease' | 'unknown';
 
 /** One resolved copy of a tracked package at a specific location. */
 export interface DriftLocation {

@@ -1,10 +1,5 @@
 export type DriftClassification =
-  | 'up-to-date'
-  | 'patch'
-  | 'minor'
-  | 'major'
-  | 'prerelease'
-  | 'unknown';
+  'up-to-date' | 'patch' | 'minor' | 'major' | 'prerelease' | 'unknown';
 
 /** One resolved copy of a tracked package at a specific location. */
 export interface DriftLocation {

@@ -186,9 +186,7 @@ function dockerodeProbe(container: Docker.Container): ContainerProbe {
 }
 
 type ReadOne =
-  | { kind: 'found'; version: string }
-  | { kind: 'absent' }
-  | { kind: 'error'; detail: string };
+  { kind: 'found'; version: string } | { kind: 'absent' } | { kind: 'error'; detail: string };
 
 async function readVersionAt(probe: ContainerProbe, candidates: string[]): Promise<ReadOne> {
   for (const path of candidates) {
