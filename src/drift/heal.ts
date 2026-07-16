@@ -102,21 +102,37 @@ function outcomeFor(
   npmSucceeded: boolean,
 ): HealPackageOutcome {
   const pkg = findPackage(after, target.name);
-  const to = pkg?.dataDir?.installed ?? null;
-  const latest = pkg?.latest ?? target.latest;
+  if (pkg === undefined) {
+    // No post-state for this package (report missing, or the rescan
+    // couldn't read it) — absence of DATA is not absence of the COPY, so
+    // never claim an update from it.
+    return {
+      name: target.name,
+      from: target.from,
+      to: target.from,
+      latest: target.latest,
+      outcome: 'unchanged',
+    };
+  }
+  const to = pkg.dataDir?.installed ?? null;
+  const latest = pkg.latest ?? target.latest;
   if (to !== null && to !== target.from) {
     return { name: target.name, from: target.from, to, latest, outcome: 'updated' };
   }
   if (to === null) {
-    // The copy is gone from the data dir — npm dedupe decided the plugin
-    // can use a hoisted/parent copy. That's an update in effect.
+    // The package WAS rescanned and its data-dir copy is gone — npm dedupe
+    // decided the plugin can use a hoisted/parent copy. That's an update
+    // in effect.
     return { name: target.name, from: target.from, to, latest, outcome: 'updated' };
   }
   // 'range-limited' is a claim about the plugins' declared ranges, and it is
-  // only provable when npm processed every named package (exit 0). After a
+  // only provable when npm processed every named package (exit 0) AND the
+  // post-state was actually compared ('unknown' proves nothing). After a
   // failed run an unchanged package may simply never have been reached —
   // call that 'unchanged', not "waiting on a plugin author".
-  const stillBehind = pkg?.dataDir?.classification !== 'up-to-date';
+  const classification = pkg.dataDir?.classification;
+  const stillBehind =
+    classification === 'patch' || classification === 'minor' || classification === 'major';
   return {
     name: target.name,
     from: target.from,
@@ -224,15 +240,25 @@ export async function runDataDirHeal(runDeps: HealRunDeps): Promise<HealResult> 
         ...done(),
       };
     }
-    await deps.rescan();
-    const afterFailed = await deps.loadReport();
+    // The rescan is best-effort here: if it throws, the failure below must
+    // STILL be returned — a rejected runner would make the route see no
+    // result and release the mutex even though npm may still be running
+    // (the exact CC-5 breach lockRetained exists to prevent).
+    let packages: HealPackageOutcome[] | undefined;
+    try {
+      await deps.rescan();
+      const afterFailed = await deps.loadReport();
+      packages = targets.map((t) => outcomeFor(t, afterFailed, false));
+    } catch {
+      packages = undefined;
+    }
     return {
       ok: false,
       reason: 'exec',
       detail: `${execResult.reason}: ${execResult.detail}`,
       startedAt,
       ...done(),
-      packages: targets.map((t) => outcomeFor(t, afterFailed, false)),
+      packages,
       lockRetained: execResult.stillRunning === true,
     };
   }

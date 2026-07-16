@@ -129,6 +129,13 @@ function HealOutcome({ result, onDismiss }: { result: HealResult; onDismiss: () 
             : 'Plugin-dependency update finished'}
       </h6>
       {!result.ok && <p className="mb-2 small">{result.detail}</p>}
+      {!result.ok && result.lockRetained && (
+        <p className="mb-2 small">
+          <strong>The operation lock is still held</strong> because npm could not be proven stopped.
+          Wait for it to finish (rescan to watch the versions settle), or force-clear the lock from
+          the Recovery tab only after confirming the process has ended.
+        </p>
+      )}
       {nothingToDo && (
         <p className="mb-0 small">No drifting plugin dependencies in the data dir.</p>
       )}

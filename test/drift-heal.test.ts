@@ -227,6 +227,56 @@ describe('runDataDirHeal', () => {
     expect(res.packages?.map((p) => p.outcome)).toEqual(['updated', 'unchanged']);
   });
 
+  it('keeps lockRetained even when the post-failure rescan throws', async () => {
+    // If the rescan rejection escaped, the route would see a rejected
+    // runner (no result) and release the mutex while npm may still be
+    // mutating the tree — the exact CC-5 breach lockRetained prevents.
+    const before = report([
+      pkg('@signalk/server-api', loc('2.30.0', 'up-to-date'), loc('2.24.0', 'minor'), '2.30.0'),
+    ]);
+    const res = await runDataDirHeal({
+      loadReport: () => Promise.resolve(before),
+      rescan: () => Promise.reject(new Error('scanner exploded')),
+      exec: () =>
+        Promise.resolve({
+          ok: false,
+          reason: 'timeout',
+          stillRunning: true,
+          detail: 'command did not finish within 600s',
+        }),
+    });
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.lockRetained).toBe(true);
+    expect(res.packages).toBeUndefined();
+  });
+
+  it('reports unchanged — never updated — when the post-scan lacks the package', async () => {
+    // Absence of post-state (rescan could not read the package) is not
+    // absence of the copy; claiming "updated (hoisted away)" from missing
+    // data would be a lie.
+    const before = report([
+      pkg('@signalk/server-api', loc('2.30.0', 'up-to-date'), loc('2.24.0', 'minor'), '2.30.0'),
+    ]);
+    const seq = reportSequence(before, report([]));
+    const res = await runDataDirHeal({
+      loadReport: seq.loadReport,
+      rescan: seq.rescan,
+      exec: okExec({}),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.packages).toEqual([
+      {
+        name: '@signalk/server-api',
+        from: '2.24.0',
+        to: '2.24.0',
+        latest: '2.30.0',
+        outcome: 'unchanged',
+      },
+    ]);
+  });
+
   it('reports npm failure but still rescans and carries per-package outcomes', async () => {
     // npm can partially succeed before erroring; the outcomes must reflect
     // what actually landed on disk, not pretend nothing happened.

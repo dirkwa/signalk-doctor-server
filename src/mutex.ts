@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { open, rename, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 
@@ -15,6 +16,12 @@ export interface LockInfo {
   operation: Operation;
   startedAt: string;
   pid?: number;
+  /** Unique per acquisition. release() only unlinks when the lock on disk
+   *  still carries this nonce, so a stale handle (lock force-cleared and
+   *  re-acquired by someone else while the old operation was still
+   *  settling) can never delete the new owner's lock. Optional because the
+   *  updater writes LockInfo without it. */
+  nonce?: string;
 }
 
 // The lock lives under the updater's data directory; the doctor mounts that
@@ -102,6 +109,7 @@ export async function acquireMutex(operation: Operation): Promise<MutexHandle> {
     operation,
     startedAt: new Date().toISOString(),
     pid: process.pid,
+    nonce: randomUUID(),
   };
   const ok = await tryAcquire(info);
   if (!ok) {
@@ -114,9 +122,20 @@ export async function acquireMutex(operation: Operation): Promise<MutexHandle> {
       startedAt: new Date().toISOString(),
     });
   }
+  let released = false;
   return {
     release: async () => {
+      // One-shot and ownership-verified: only remove the lock while it is
+      // still OURS. If it was force-cleared and re-acquired by another
+      // operation while this one settled, unlinking blindly would delete
+      // the new owner's lock and reopen the concurrent-mutation window
+      // CC-5 exists to close. (The read-then-unlink is itself a narrow
+      // race, but it shrinks the window from "always" to "microseconds".)
+      if (released) return;
+      released = true;
       try {
+        const current = await readLock();
+        if (current !== null && current.nonce !== info.nonce) return;
         await unlink(lockPath());
       } catch {
         // best-effort

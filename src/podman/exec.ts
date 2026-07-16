@@ -112,11 +112,17 @@ export async function execInContainer(
 
   const startedStream = await safe(() => exec.start({}));
   if (!startedStream.ok) {
+    // A start() transport error can arrive AFTER the daemon already began
+    // the process (hijacked-stream semantics) — probe the exec record and
+    // only report it stopped when that is proven; otherwise the caller must
+    // keep any mutex held over what the command mutates.
+    const probed = await waitForExit(exec, 2000, 100);
     return {
       ok: false,
       reason: 'runtime',
       detail: `${startedStream.error.kind}: ${startedStream.error.userMessage}`,
       error: startedStream.error,
+      stillRunning: probed.kind !== 'exit',
     };
   }
   const stream = startedStream.value;
@@ -172,12 +178,16 @@ export async function execInContainer(
     };
   }
   if (finished instanceof Error) {
+    // A stream error mid-run says nothing about the process itself — probe
+    // before claiming anything about its state.
+    const probed = await waitForExit(exec, 2000, 100);
     const error = categorizeError(finished);
     return {
       ok: false,
       reason: 'runtime',
       detail: `${error.kind}: ${error.userMessage}`,
       error,
+      stillRunning: probed.kind !== 'exit',
     };
   }
 
@@ -190,6 +200,8 @@ export async function execInContainer(
       reason: 'runtime',
       detail: `${settled.error.kind}: ${settled.error.userMessage}`,
       error: settled.error,
+      // Inspect failed — the stopped state is unproven.
+      stillRunning: true,
     };
   }
   if (settled.kind === 'running') {
