@@ -2,7 +2,13 @@ import { open, rename, unlink } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 
 export type Operation =
-  'switch' | 'rollback' | 'self-update' | 'hardware-apply' | 'recover' | 'installer-refresh';
+  | 'switch'
+  | 'rollback'
+  | 'self-update'
+  | 'hardware-apply'
+  | 'recover'
+  | 'installer-refresh'
+  | 'heal-plugin-deps';
 
 export interface LockInfo {
   owner: 'updater' | 'doctor';
@@ -79,7 +85,18 @@ async function tryAcquire(info: LockInfo): Promise<boolean> {
   }
 }
 
-export async function withMutex<T>(operation: Operation, fn: () => Promise<T>): Promise<T> {
+export interface MutexHandle {
+  release: () => Promise<void>;
+}
+
+/** Acquire the shared operation lock and return an explicit release handle.
+ *  For callers whose work can outlive the acquiring request — e.g. a heal
+ *  whose `npm update` may still be running in the container after a timeout
+ *  — releasing must be a decision, not a finally: dropping the lock while
+ *  the child still mutates the tree would let the updater run concurrently
+ *  against the same node_modules (the exact corruption CC-5 exists to
+ *  prevent). Prefer withMutex() when the work is strictly request-scoped. */
+export async function acquireMutex(operation: Operation): Promise<MutexHandle> {
   const info: LockInfo = {
     owner: 'doctor',
     operation,
@@ -97,14 +114,23 @@ export async function withMutex<T>(operation: Operation, fn: () => Promise<T>): 
       startedAt: new Date().toISOString(),
     });
   }
+  return {
+    release: async () => {
+      try {
+        await unlink(lockPath());
+      } catch {
+        // best-effort
+      }
+    },
+  };
+}
+
+export async function withMutex<T>(operation: Operation, fn: () => Promise<T>): Promise<T> {
+  const handle = await acquireMutex(operation);
   try {
     return await fn();
   } finally {
-    try {
-      await unlink(lockPath());
-    } catch {
-      // best-effort
-    }
+    await handle.release();
   }
 }
 

@@ -69,7 +69,10 @@ const TRACKED_PACKAGES = [
 
 const TARGET_CONTAINER = 'signalk-server';
 
-function dataDirRoot(): string {
+/** The signalk-server data dir (configPath) inside the target container —
+ *  where the appstore npm-installs plugins. Exported for the heal engine,
+ *  which runs `npm update` against this same tree. */
+export function dataDirRoot(): string {
   return process.env.SIGNALK_DOCTOR_TARGET_CONF_DIR ?? '/home/node/.signalk';
 }
 function appDirRoot(): string {

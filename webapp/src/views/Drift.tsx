@@ -4,6 +4,7 @@ import {
   fmtTime,
   getDrift,
   refreshDrift,
+  runDriftHeal,
   relTime,
   type ApiError,
   type DriftClassification,
@@ -11,7 +12,9 @@ import {
   type DriftLocation,
   type DriftPackage,
   type DriftReport,
+  type HealResult,
 } from '../api';
+import { ConfirmModal } from '../components/ConfirmModal';
 
 /** Reason-specific guidance for the "Online: offline" failure modes.
  *  Each entry: short label for the inline badge, a longer "what to do
@@ -92,6 +95,88 @@ function sortBySeverity(packages: DriftReport['packages']): DriftReport['package
   });
 }
 
+/** True when the package's data-dir (plugin tree) copy is behind and a
+ *  range-respecting `npm update` could move it. Mirrors the engine's
+ *  selectHealTargets(). */
+function isHealable(p: DriftPackage): boolean {
+  const c = p.dataDir?.classification;
+  return c === 'patch' || c === 'minor' || c === 'major';
+}
+
+const OUTCOME_PRESENTATION = {
+  updated: { color: 'success', label: 'updated' },
+  'range-limited': { color: 'warning', label: 'range-limited' },
+  unchanged: { color: 'secondary', label: 'unchanged' },
+} as const;
+
+/** What the heal actually did, package by package, with the honest
+ *  residue story: range-limited copies wait on a plugin author's range
+ *  bump, not on the operator. */
+function HealOutcome({ result, onDismiss }: { result: HealResult; onDismiss: () => void }) {
+  const packages = result.ok ? result.packages : (result.packages ?? []);
+  const updated = packages.filter((p) => p.outcome === 'updated');
+  const limited = packages.filter((p) => p.outcome === 'range-limited');
+  const color = !result.ok ? 'danger' : limited.length > 0 ? 'warning' : 'success';
+  const nothingToDo = result.ok && result.targets.length === 0;
+
+  return (
+    <Alert color={color} className="mb-3" toggle={onDismiss}>
+      <h6 className="alert-heading mb-2">
+        {!result.ok
+          ? 'Plugin-dependency update failed'
+          : nothingToDo
+            ? 'Nothing to update'
+            : 'Plugin-dependency update finished'}
+      </h6>
+      {!result.ok && <p className="mb-2 small">{result.detail}</p>}
+      {nothingToDo && (
+        <p className="mb-0 small">No drifting plugin dependencies in the data dir.</p>
+      )}
+      {packages.length > 0 && (
+        <ul className="small mb-2">
+          {packages.map((p) => (
+            <li key={p.name}>
+              <span className="font-monospace">{p.name}</span>{' '}
+              <Badge color={OUTCOME_PRESENTATION[p.outcome].color} pill>
+                {OUTCOME_PRESENTATION[p.outcome].label}
+              </Badge>{' '}
+              {p.outcome === 'updated' ? (
+                <span className="font-monospace">
+                  {p.from} → {p.to ?? 'hoisted away'}
+                </span>
+              ) : (
+                <>
+                  <span className="font-monospace">stays {p.from}</span>
+                  {p.outcome === 'range-limited' && (
+                    <span className="text-muted">
+                      {' '}
+                      — newest the plugins&apos; declared ranges allow (latest is{' '}
+                      <span className="font-monospace">{p.latest ?? '?'}</span>); waiting on a
+                      plugin-author range bump, nothing to fix here
+                    </span>
+                  )}
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {updated.length > 0 && (
+        <p className="mb-2 small">
+          <strong>Restart signalk-server</strong> so plugins reload the updated dependencies (via
+          the Updater Console or <code>signalk restart</code>).
+        </p>
+      )}
+      {'outputTail' in result && result.outputTail && (
+        <details className="small">
+          <summary>npm output</summary>
+          <pre className="mb-0 mt-2">{result.outputTail}</pre>
+        </details>
+      )}
+    </Alert>
+  );
+}
+
 /** Version + classification badge for one location; a plain dash when the
  *  package has no copy at that location. */
 function LocationCell({ location }: { location: DriftLocation | null }) {
@@ -113,6 +198,11 @@ export function Drift() {
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
+  const [confirmHeal, setConfirmHeal] = useState(false);
+  const [healBusy, setHealBusy] = useState(false);
+  const [healElapsed, setHealElapsed] = useState(0);
+  const [healResult, setHealResult] = useState<HealResult | null>(null);
+  const [healErr, setHealErr] = useState<string | null>(null);
 
   const load = useCallback(async (): Promise<void> => {
     try {
@@ -151,6 +241,39 @@ export function Drift() {
     }
   }
 
+  async function heal(): Promise<void> {
+    setConfirmHeal(false);
+    setHealBusy(true);
+    setHealErr(null);
+    setHealResult(null);
+    setHealElapsed(0);
+    try {
+      const result = await runDriftHeal(setHealElapsed);
+      setHealResult(result);
+      // The job already rescanned server-side; pull the fresh report so the
+      // table reflects the post-update state. A refresh failure must NOT go
+      // through load() — its loadErr replaces the whole view and would eat
+      // the outcome panel; a stale table under a fresh outcome is the
+      // lesser evil.
+      try {
+        setReport(await getDrift());
+      } catch {
+        // keep the pre-heal table; the outcome panel carries the results
+      }
+    } catch (err) {
+      if (err instanceof Error && (err as ApiError).status === 409) {
+        const body = (err as ApiError).body as { lock?: { owner?: string; operation?: string } };
+        setHealErr(
+          `Another operation is in progress (${body?.lock?.owner ?? '?'}/${body?.lock?.operation ?? '?'}) — wait for it to finish and retry.`,
+        );
+      } else {
+        setHealErr(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      setHealBusy(false);
+    }
+  }
+
   if (loadErr !== null) {
     return (
       <Alert color="danger">
@@ -170,6 +293,7 @@ export function Drift() {
 
   const sorted = sortBySeverity(report.packages);
   const drifting = report.packages.filter((p) => worstClassification(p) !== 'up-to-date');
+  const healable = report.packages.filter(isHealable);
 
   return (
     <div>
@@ -248,14 +372,44 @@ export function Drift() {
         </Alert>
       )}
 
+      {healErr !== null && (
+        <Alert color="danger" className="mb-3" toggle={() => setHealErr(null)}>
+          <strong>Could not update plugin dependencies.</strong>
+          <div className="small mt-1">{healErr}</div>
+        </Alert>
+      )}
+
+      {healResult !== null && (
+        <HealOutcome result={healResult} onDismiss={() => setHealResult(null)} />
+      )}
+
       <Card>
         <CardHeader className="d-flex justify-content-between align-items-center">
           <strong>Packages</strong>
-          <span className="text-muted small">
-            {drifting.length === 0
-              ? `${report.packages.length} tracked, all up to date`
-              : `${drifting.length} drifting / ${report.packages.length} tracked`}
-          </span>
+          <div className="d-flex align-items-center gap-2">
+            <span className="text-muted small">
+              {drifting.length === 0
+                ? `${report.packages.length} tracked, all up to date`
+                : `${drifting.length} drifting / ${report.packages.length} tracked`}
+            </span>
+            <Button
+              color="primary"
+              outline
+              size="sm"
+              disabled={healable.length === 0 || healBusy || busy}
+              onClick={() => setConfirmHeal(true)}
+              title={
+                healable.length === 0
+                  ? 'No drifting plugin dependencies in the data dir'
+                  : `npm update ${healable.length} package${healable.length === 1 ? '' : 's'} in the plugin tree`
+              }
+            >
+              {healBusy && <Spinner size="sm" className="me-2" />}
+              {healBusy
+                ? `Updating… ${healElapsed}s`
+                : `Update plugin dependencies${healable.length > 0 ? ` (${healable.length})` : ''}`}
+            </Button>
+          </div>
         </CardHeader>
         <CardBody className="p-0">
           {report.packages.length === 0 ? (
@@ -292,6 +446,22 @@ export function Drift() {
           )}
         </CardBody>
       </Card>
+
+      <ConfirmModal
+        isOpen={confirmHeal}
+        title="Update plugin dependencies?"
+        body={
+          `npm will update ${healable.length} drifting package${healable.length === 1 ? '' : 's'} ` +
+          'in the data dir plugin tree (~/.signalk/node_modules) inside the signalk-server ' +
+          "container, respecting every plugin's declared version range. The image's copies are " +
+          'not touched. Packages whose plugins pin an older range stay put — that residue needs ' +
+          'a plugin update, not this button. Afterwards restart signalk-server so plugins reload ' +
+          'the updated dependencies.'
+        }
+        okLabel="Update"
+        onConfirm={() => void heal()}
+        onCancel={() => setConfirmHeal(false)}
+      />
     </div>
   );
 }
