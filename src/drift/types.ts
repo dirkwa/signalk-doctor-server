@@ -1,5 +1,15 @@
-export type DriftClassification =
-  'up-to-date' | 'patch' | 'minor' | 'major' | 'prerelease' | 'unknown';
+/** Every classification value, as data — the single source both for the
+ *  DriftClassification type and for validating persisted reports on load. */
+export const DRIFT_CLASSIFICATIONS = [
+  'up-to-date',
+  'patch',
+  'minor',
+  'major',
+  'prerelease',
+  'unknown',
+] as const;
+
+export type DriftClassification = (typeof DRIFT_CLASSIFICATIONS)[number];
 
 /** One resolved copy of a tracked package at a specific location. */
 export interface DriftLocation {

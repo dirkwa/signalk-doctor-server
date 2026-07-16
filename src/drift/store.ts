@@ -1,5 +1,6 @@
 import { open, mkdir, readFile, rename } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { DRIFT_CLASSIFICATIONS } from './types.js';
 import type {
   DriftClassification,
   DriftFetchError,
@@ -69,14 +70,7 @@ function isAcceptableReasonOnDisk(value: unknown): value is string {
   return isCurrentReason(value) || (typeof value === 'string' && value in RETIRED_REASON_MAP);
 }
 
-const CLASSIFICATIONS: ReadonlySet<DriftClassification> = new Set([
-  'up-to-date',
-  'patch',
-  'minor',
-  'major',
-  'prerelease',
-  'unknown',
-]);
+const CLASSIFICATIONS: ReadonlySet<DriftClassification> = new Set(DRIFT_CLASSIFICATIONS);
 
 function strOrNull(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
