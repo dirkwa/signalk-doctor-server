@@ -22,6 +22,10 @@ const SOCKETCAN_TMPL = `#!/usr/bin/env bash
 echo "signalk-socketcan"
 `;
 
+const BLUETOOTH_TMPL = `#!/usr/bin/env bash
+echo "signalk-bluetooth"
+`;
+
 const QUADLET_TMPL = `[Unit]
 Description=Test
 [Container]
@@ -47,6 +51,10 @@ const FIXTURES: Record<string, RouteFixture> = {
     expectedSubstr: 'signalk-socketcan',
     body: SOCKETCAN_TMPL,
   },
+  '/installer/linux/signalk-bluetooth.tmpl': {
+    expectedSubstr: 'signalk-bluetooth',
+    body: BLUETOOTH_TMPL,
+  },
   '/installer/linux/detect-hardware.sh': { expectedSubstr: 'detectedAt', body: DETECT_SCRIPT },
   '/quadlets/signalk-server.container.template': {
     expectedSubstr: '__DOCTOR_IMAGE__',
@@ -57,6 +65,10 @@ const FIXTURES: Record<string, RouteFixture> = {
     body: QUADLET_TMPL,
   },
   '/quadlets/signalk-doctor-server.container.template': {
+    expectedSubstr: '__DOCTOR_IMAGE__',
+    body: QUADLET_TMPL,
+  },
+  '/quadlets/signalk-dbus-proxy.container.template': {
     expectedSubstr: '__DOCTOR_IMAGE__',
     body: QUADLET_TMPL,
   },
@@ -161,7 +173,7 @@ describe('installer-refresh routes', () => {
     const body = res.json();
     expect(body.hostBinMounted).toBe(true);
     expect(body.pagesBase).toBe(pages.baseUrl);
-    expect(body.artifacts).toHaveLength(7);
+    expect(body.artifacts).toHaveLength(9);
     expect(body.artifacts.every((a: { present: boolean }) => a.present === false)).toBe(true);
     await app.close();
   });
@@ -182,7 +194,7 @@ describe('installer-refresh routes', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.counts.updated).toBe(7);
+    expect(body.counts.updated).toBe(9);
     expect(body.counts['fetch-failed']).toBe(0);
     expect(body.counts['mount-missing']).toBe(0);
 
@@ -199,6 +211,10 @@ describe('installer-refresh routes', () => {
     // socketcan helper is byte-for-byte identical (no substitution).
     const socketcanBody = await readFile(join(hostBin, 'signalk-socketcan'), 'utf8');
     expect(socketcanBody).toBe(SOCKETCAN_TMPL);
+
+    // bluetooth helper follows the same no-substitution contract.
+    const bluetoothBody = await readFile(join(hostBin, 'signalk-bluetooth'), 'utf8');
+    expect(bluetoothBody).toBe(BLUETOOTH_TMPL);
 
     // Quadlet templates are NOT substituted by the doctor; they're written
     // verbatim into the payload dir for the bash installer's render step.
@@ -232,7 +248,7 @@ describe('installer-refresh routes', () => {
     });
     expect(res2.statusCode).toBe(200);
     const body2 = res2.json();
-    expect(body2.counts.unchanged).toBe(7);
+    expect(body2.counts.unchanged).toBe(9);
     expect(body2.counts.updated).toBe(0);
 
     const secondSnapshots = await readdir(join(dir, 'installer-snapshots')).catch(
@@ -279,8 +295,8 @@ describe('installer-refresh routes', () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.counts['mount-missing']).toBe(3); // signalk + signalk-recovery + signalk-socketcan
-      expect(body.counts.updated).toBe(4); // detect + 3 quadlets
+      expect(body.counts['mount-missing']).toBe(4); // signalk + recovery + socketcan + bluetooth
+      expect(body.counts.updated).toBe(5); // detect + 4 quadlets
       await app.close();
     } finally {
       if (prevHost === undefined) delete process.env.HOST_BIN_DIR;

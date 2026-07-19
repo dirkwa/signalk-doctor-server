@@ -83,6 +83,17 @@ function artifacts(): ArtifactDescriptor[] {
       kind: 'host-script',
     },
     {
+      // BLE / D-Bus passthrough helper (installer PR #173). Same shape as
+      // signalk-socketcan: no placeholders, written byte-for-byte to the
+      // host PATH so `signalk bluetooth` works after a refresh without
+      // re-running the bash installer.
+      id: 'signalk-bluetooth',
+      remotePath: 'installer/linux/signalk-bluetooth.tmpl',
+      destPath: join(hb, 'signalk-bluetooth'),
+      mode: 0o755,
+      kind: 'host-script',
+    },
+    {
       id: 'detect-hardware',
       // The detect-hardware script is fetched but not invoked by the doctor —
       // it needs host devices (/dev/serial/by-id, /proc/device-tree/model, the
@@ -115,6 +126,16 @@ function artifacts(): ArtifactDescriptor[] {
       id: 'quadlet-doctor-server',
       remotePath: 'quadlets/signalk-doctor-server.container.template',
       destPath: join(pd, 'signalk-doctor-server.container.template'),
+      mode: 0o644,
+      kind: 'quadlet-template',
+    },
+    {
+      // dbus-auth-proxy sidecar for BLE passthrough (installer PR #173).
+      // Staged like the other templates — the doctor never applies it;
+      // the bash installer (or a future apply flow) consumes the payload.
+      id: 'quadlet-dbus-proxy',
+      remotePath: 'quadlets/signalk-dbus-proxy.container.template',
+      destPath: join(pd, 'signalk-dbus-proxy.container.template'),
       mode: 0o644,
       kind: 'quadlet-template',
     },
