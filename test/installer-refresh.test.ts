@@ -36,6 +36,10 @@ const DETECT_SCRIPT = `#!/usr/bin/env bash
 echo '{"detectedAt":"test"}'
 `;
 
+const RENDER_SCRIPT = `#!/usr/bin/env bash
+echo "render-server-quadlet"
+`;
+
 interface RouteFixture {
   expectedSubstr: string; // sentinel that should appear in fetched body
   body: string;
@@ -56,6 +60,10 @@ const FIXTURES: Record<string, RouteFixture> = {
     body: BLUETOOTH_TMPL,
   },
   '/installer/linux/detect-hardware.sh': { expectedSubstr: 'detectedAt', body: DETECT_SCRIPT },
+  '/installer/linux/render-server-quadlet.sh': {
+    expectedSubstr: 'render-server-quadlet',
+    body: RENDER_SCRIPT,
+  },
   '/quadlets/signalk-server.container.template': {
     expectedSubstr: '__DOCTOR_IMAGE__',
     body: QUADLET_TMPL,
@@ -173,7 +181,7 @@ describe('installer-refresh routes', () => {
     const body = res.json();
     expect(body.hostBinMounted).toBe(true);
     expect(body.pagesBase).toBe(pages.baseUrl);
-    expect(body.artifacts).toHaveLength(9);
+    expect(body.artifacts).toHaveLength(10);
     expect(body.artifacts.every((a: { present: boolean }) => a.present === false)).toBe(true);
     await app.close();
   });
@@ -194,7 +202,7 @@ describe('installer-refresh routes', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.counts.updated).toBe(9);
+    expect(body.counts.updated).toBe(10);
     expect(body.counts['fetch-failed']).toBe(0);
     expect(body.counts['mount-missing']).toBe(0);
 
@@ -248,7 +256,7 @@ describe('installer-refresh routes', () => {
     });
     expect(res2.statusCode).toBe(200);
     const body2 = res2.json();
-    expect(body2.counts.unchanged).toBe(9);
+    expect(body2.counts.unchanged).toBe(10);
     expect(body2.counts.updated).toBe(0);
 
     const secondSnapshots = await readdir(join(dir, 'installer-snapshots')).catch(
@@ -296,7 +304,7 @@ describe('installer-refresh routes', () => {
       expect(res.statusCode).toBe(200);
       const body = res.json();
       expect(body.counts['mount-missing']).toBe(4); // signalk + recovery + socketcan + bluetooth
-      expect(body.counts.updated).toBe(5); // detect + 4 quadlets
+      expect(body.counts.updated).toBe(6); // detect + render-server-quadlet + 4 quadlets
       await app.close();
     } finally {
       if (prevHost === undefined) delete process.env.HOST_BIN_DIR;
