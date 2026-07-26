@@ -123,9 +123,15 @@ describe('restart routes', () => {
           headers: { authorization: `Bearer ${TOKEN}` },
         });
         expect(res.statusCode).toBe(409);
-        const body = res.json() as { lock: { owner: string; operation: string } };
+        const body = res.json() as {
+          lock: { owner: string; operation: string };
+          hint: string;
+        };
         expect(body.lock.owner).toBe('updater');
         expect(body.lock.operation).toBe('switch');
+        // CC-5: the conflict response must tell the operator what to do.
+        expect(body.hint).toMatch(/wait/i);
+        expect(body.hint).toMatch(/force-clear/i);
         expect(restartUnit).not.toHaveBeenCalled();
       });
     } finally {

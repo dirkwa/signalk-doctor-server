@@ -76,7 +76,7 @@ function zonesMatch(a: string, b: string): boolean {
 /** Read signalk-server's effective IANA zone the same way signalk-container
  *  does — Intl inside the container, which honors /etc/localtime (set by
  *  Timezone=local at create). Authoritative and needs no host time files. */
-async function readServerZone(): Promise<{ zone: string | null; error: string | null }> {
+export async function readServerZone(): Promise<{ zone: string | null; error: string | null }> {
   const r = await execInContainer(
     'signalk-server',
     ['node', '-e', 'process.stdout.write(Intl.DateTimeFormat().resolvedOptions().timeZone)'],
@@ -97,29 +97,34 @@ async function readServerZone(): Promise<{ zone: string | null; error: string | 
 /** Read the TZ env of each present managed peer container via inspect. A
  *  present peer with no TZ maps to null (surfaced as a propagation failure);
  *  a not-installed peer is omitted. */
-async function readPeerZones(): Promise<{
+export async function readPeerZones(): Promise<{
   peers: Record<string, string | null>;
   error: string | null;
 }> {
   const rt = await resolveRuntime();
   if (!rt) return { peers: {}, error: null };
   const peers: Record<string, string | null> = {};
+  // Accumulate errors across peers instead of bailing on the first one: a
+  // single unreachable/malformed peer must not hide a later peer's real drift.
+  const errors: string[] = [];
   for (const name of KNOWN_PEERS) {
     const res = await safe(() => rt.client.getContainer(name).inspect());
     if (!res.ok) {
       if (res.error.kind === 'not-found') continue; // peer not installed — benign
-      return { peers, error: `${name}: ${res.error.kind}: ${res.error.userMessage}` };
+      errors.push(`${name}: ${res.error.kind}: ${res.error.userMessage}`);
+      continue;
     }
     // Narrow the dockerode payload rather than assert its shape (CC-6 posture).
     const config = isRecord(res.value) && isRecord(res.value.Config) ? res.value.Config : null;
     const rawEnv = config?.Env;
     if (!Array.isArray(rawEnv) || !rawEnv.every((e) => typeof e === 'string')) {
-      return { peers, error: `${name}: malformed inspect response (no Config.Env array)` };
+      errors.push(`${name}: malformed inspect response (no Config.Env array)`);
+      continue;
     }
     const tzEntry = rawEnv.find((e) => e.startsWith('TZ='));
     peers[name] = tzEntry === undefined ? null : tzEntry.slice('TZ='.length);
   }
-  return { peers, error: null };
+  return { peers, error: errors.length > 0 ? errors.join('; ') : null };
 }
 
 export interface TimezoneDriftDeps {
