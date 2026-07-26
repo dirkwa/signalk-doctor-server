@@ -7,6 +7,7 @@ import { registerHealthRoutes } from './routes/health.js';
 import { registerSessionRoutes } from './routes/session.js';
 import { registerProbeRoutes } from './routes/probes.js';
 import { registerRecoverRoutes } from './routes/recover.js';
+import { registerRestartRoutes } from './routes/restart.js';
 import { registerLogStreamRoutes } from './routes/logs-stream.js';
 import { registerSelfRoutes } from './routes/self.js';
 import { registerDriftRoutes } from './routes/drift.js';
@@ -39,6 +40,7 @@ export async function createServer(): Promise<{
   await registerSessionRoutes(app);
   await registerProbeRoutes(app);
   await registerRecoverRoutes(app);
+  await registerRestartRoutes(app);
   await registerLogStreamRoutes(app);
   await registerSelfRoutes(app);
   await registerDriftRoutes(app, driftScheduler);

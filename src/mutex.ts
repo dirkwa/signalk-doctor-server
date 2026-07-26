@@ -8,6 +8,7 @@ export type Operation =
   | 'self-update'
   | 'hardware-apply'
   | 'recover'
+  | 'restart'
   | 'installer-refresh'
   | 'heal-plugin-deps';
 
