@@ -109,6 +109,21 @@ function artifacts(): ArtifactDescriptor[] {
       kind: 'detect-script',
     },
     {
+      // render-server-quadlet.sh — the bash renderer that rebuilds the live
+      // signalk-server.container from the staged template + hardware.json.
+      // Refreshed here (not just staged at install time) so `signalk
+      // render-server` / `signalk update`'s chained re-render on an existing
+      // box always runs the current renderer alongside the current template
+      // (issue #217). Like detect-hardware.sh it's fetched-not-invoked by the
+      // doctor — the HOST `signalk` CLI executes it; it needs host devices
+      // and the live Quadlet the doctor container doesn't have. 0o755 (executable).
+      id: 'render-server-quadlet',
+      remotePath: 'installer/linux/render-server-quadlet.sh',
+      destPath: join(pd, 'render-server-quadlet.sh'),
+      mode: 0o755,
+      kind: 'detect-script',
+    },
+    {
       id: 'quadlet-signalk-server',
       remotePath: 'quadlets/signalk-server.container.template',
       destPath: join(pd, 'signalk-server.container.template'),
