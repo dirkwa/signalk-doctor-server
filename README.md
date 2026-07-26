@@ -4,7 +4,7 @@ Peer engine container for the SignalK container stack. Owns **read-only diagnost
 
 This is **not a SignalK plugin** — it runs in its own container alongside `signalk-server` and is intentionally independent of `signalk-updater-server`. When the updater itself is broken (bad self-update, crashloop, DBus dead), the doctor is the path back.
 
-> Status: **skeleton**. Only `GET /api/health` is implemented. Real probes and the recover endpoint land in Phase 5.
+It runs a set of read-only health probes (`GET /api/probes`) — container/runtime state, SignalK and updater health, disk/memory, version and dependency drift, host↔container **timezone drift**, and more — plus last-known-good recovery, targeted plugin-dependency heal, and a bundled bug-report collector. The browser console (Health / Logs / Snapshots / Drift / Recovery / Bug report / Installer tabs) is served from `:3004` and also embeds in the SignalK admin via the [signalk-doctor](https://github.com/dirkwa/signalk-doctor) plugin.
 
 ## Companion repos
 
@@ -16,11 +16,11 @@ This is **not a SignalK plugin** — it runs in its own container alongside `sig
 
 ## Trust boundary
 
-This container reads the Podman socket, DBus, and `~/.config/containers/systemd/` — but mutating endpoints are narrow (recover only). Posture:
+This container reads the Podman socket, DBus, and `~/.config/containers/systemd/` — but its mutating surface is deliberately narrow. Posture:
 
-- Bound to `127.0.0.1:3004` only.
-- Read-only probes are **unauthenticated** (intentional — they're the recovery surface).
-- Mutating endpoints (`/api/recover*`) require `Authorization: Bearer <token>` from `~/.signalk-doctor/token` (mode 0600).
+- Bound to `127.0.0.1:3004` only (LAN-exposed only when installed with `SIGNALK_LAN_EXPOSE=true`).
+- Read-only probes and views are **unauthenticated** (intentional — they're the recovery surface that must always answer).
+- Mutating endpoints require `Authorization: Bearer <token>` from `~/.signalk-doctor/token` (mode 0600): `POST /api/recover{,/updater}` (restore last-known-good), `POST /api/restart/signalk-server` (recreate signalk-server — e.g. to apply a new host timezone), `POST /api/installer/refresh`, `POST /api/bug-report`, and `POST /api/drift/{refresh,heal}`.
 
 ## Local dev
 
