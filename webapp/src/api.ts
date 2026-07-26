@@ -173,6 +173,13 @@ export function recoverUpdater(): Promise<unknown> {
   return request<unknown>('/recover/updater', { method: 'POST' });
 }
 
+/** Plain recreate of signalk-server (re-applies the CURRENT Quadlet, unlike
+ *  recover which restores last-known-good). Used to apply a new host timezone
+ *  the running container hasn't picked up. */
+export function restartSignalkServer(): Promise<{ ok: boolean; unit: string }> {
+  return request<{ ok: boolean; unit: string }>('/restart/signalk-server', { method: 'POST' });
+}
+
 export function logsStreamUrl(name: string, tail: number): string {
   return `${API_BASE}/containers/${encodeURIComponent(name)}/logs/stream?tail=${tail}`;
 }

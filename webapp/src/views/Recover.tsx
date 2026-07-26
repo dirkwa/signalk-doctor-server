@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { Alert, Button, Card, CardBody, CardHeader } from 'reactstrap';
-import { recoverAll, recoverUpdater, type ApiError } from '../api';
+import { recoverAll, recoverUpdater, restartSignalkServer, type ApiError } from '../api';
 import { ConfirmModal } from '../components/ConfirmModal';
 
-type Target = 'all' | 'updater';
+type Target = 'all' | 'updater' | 'restart-server';
 
 interface PendingConfirm {
   target: Target;
@@ -23,6 +23,11 @@ const PROMPTS: Record<Target, Omit<PendingConfirm, 'target'>> = {
     body: 'This restores signalk-updater-server.container from last-known-good and restarts the updater. signalk-server is not touched.',
     okLabel: 'Recover updater',
   },
+  'restart-server': {
+    title: 'Restart signalk-server?',
+    body: 'This recreates signalk-server (its CURRENT Quadlet — not a last-known-good rollback), which re-applies the host timezone and propagates it to the managed peer containers. Expect a brief (~3–10s) outage; WebSocket clients reconnect.',
+    okLabel: 'Restart signalk-server',
+  },
 };
 
 export function Recover() {
@@ -35,16 +40,23 @@ export function Recover() {
     setConfirm({ target, ...PROMPTS[target] });
   }
 
+  const action: Record<Target, () => Promise<unknown>> = {
+    all: recoverAll,
+    updater: recoverUpdater,
+    'restart-server': restartSignalkServer,
+  };
+
   async function execute(target: Target): Promise<void> {
     setBusy(target);
-    setResult(`Recovering ${target}…`);
+    setResult(target === 'restart-server' ? 'Restarting signalk-server…' : `Recovering ${target}…`);
     setResultKind(null);
     try {
-      const out = await (target === 'all' ? recoverAll() : recoverUpdater());
+      const out = await action[target]();
       setResult(JSON.stringify(out, null, 2));
       setResultKind('ok');
     } catch (err) {
-      const lines = [`Recovery (${target}) failed:`];
+      const verb = target === 'restart-server' ? 'Restart' : 'Recovery';
+      const lines = [`${verb} (${target}) failed:`];
       if (err instanceof Error) {
         lines.push(err.message);
         const body = (err as ApiError).body;
@@ -114,6 +126,30 @@ export function Recover() {
               <pre className="mb-0 small">{result}</pre>
             </Alert>
           )}
+        </CardBody>
+      </Card>
+
+      <Card className="mb-3">
+        <CardHeader>
+          <strong>Restart signalk-server</strong>
+        </CardHeader>
+        <CardBody>
+          <p className="mb-2">
+            Recreate <code>signalk-server</code> from its current Quadlet — not a rollback. Use this
+            to apply a host timezone change the running container hasn&apos;t picked up (the{' '}
+            <em>Timezone drift</em> health check flags exactly this). The recreate re-runs{' '}
+            <code>Timezone=local</code> and propagates the new zone to the managed peer containers.
+          </p>
+          <Button
+            color="primary"
+            outline
+            disabled={busy !== null}
+            onClick={() => {
+              askConfirm('restart-server');
+            }}
+          >
+            Restart signalk-server
+          </Button>
         </CardBody>
       </Card>
 
