@@ -1,4 +1,6 @@
 import type { ProbeResult } from './types.js';
+import { MIN_HOP_MS, startProbeDeadline } from './budget.js';
+import { describeFetchError } from './fetch-error.js';
 
 // Same reasoning as signalk-health.ts: 127.0.0.1 is the doctor's own
 // container, not the host. Reach the updater via Podman's host gateway.
@@ -19,16 +21,26 @@ const SLOW_MS = 4000;
 // sibling path has the least headroom and is first to stall under load)
 // doesn't flap the probe to fail. Shorter than the installer's 180s startup
 // gate — this runs on every /api/probes call.
+//
+// RETRIES is an upper bound, not a promise: three 5s attempts plus their
+// backoffs sum to 18s, far past the runner's per-probe budget, and a probe the
+// runner kills has its verdict thrown away and replaced with a bare
+// "timed out". So the ladder also stops the moment the budget can no longer
+// fund a meaningful attempt — a real `cannot reach …` beats a retry we cannot
+// afford to finish.
 const RETRIES = 2;
 const RETRY_DELAY_MS = 1500;
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-async function fetchHealthOnce(): Promise<Response> {
+async function fetchHealthOnce(timeoutMs: number): Promise<Response> {
+  const started = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(UPDATER_URL, { signal: controller.signal });
+  } catch (err) {
+    throw new Error(describeFetchError(err, Date.now() - started), { cause: err });
   } finally {
     clearTimeout(timer);
   }
@@ -36,15 +48,18 @@ async function fetchHealthOnce(): Promise<Response> {
 
 export async function probeUpdaterHealth(): Promise<ProbeResult> {
   const t0 = Date.now();
+  const deadline = startProbeDeadline();
   let lastErr: unknown;
+  let attempts = 0;
   for (let attempt = 0; attempt <= RETRIES; attempt++) {
     if (attempt > 0) await delay(RETRY_DELAY_MS);
+    attempts++;
     // Time the slow check against THIS attempt, not t0 — t0 includes failed
     // attempts and their retry delays, which would mislabel a fast success
     // after a transient failure as "slow I/O". durationMs still reports total.
     const attemptStart = Date.now();
     try {
-      const res = await fetchHealthOnce();
+      const res = await fetchHealthOnce(deadline.hop(TIMEOUT_MS));
       if (!res.ok) {
         return {
           id: 'updater-health',
@@ -85,13 +100,17 @@ export async function probeUpdaterHealth(): Promise<ProbeResult> {
     } catch (err) {
       lastErr = err;
     }
+    // Retry only while the budget can still fund the backoff AND a hop long
+    // enough to mean something; otherwise stop and report the error we have.
+    if (!deadline.allows(RETRY_DELAY_MS + MIN_HOP_MS)) break;
   }
   const msg = lastErr instanceof Error ? lastErr.message : String(lastErr);
+  const tries = attempts > 1 ? ` (${attempts} attempts)` : '';
   return {
     id: 'updater-health',
     label: 'Updater HTTP health',
     status: 'fail',
-    message: `cannot reach ${UPDATER_URL}: ${msg}`,
+    message: `cannot reach ${UPDATER_URL}: ${msg}${tries}`,
     durationMs: Date.now() - t0,
   };
 }

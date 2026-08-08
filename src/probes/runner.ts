@@ -13,6 +13,7 @@ import { probeTimezoneDrift } from './timezone-drift.js';
 import { probeDependencyDrift } from './dependency-drift.js';
 import { probeCgroupDelegation } from './cgroup-delegation.js';
 import { probeStorageType } from './storage-type.js';
+import { probeTimeoutMs } from './budget.js';
 
 interface ProbeSpec {
   /** The stable id the probe emits on its own ProbeResult. Declared here
@@ -49,21 +50,10 @@ const PROBES: ProbeSpec[] = [
   { id: 'storage-type', label: 'Host root storage', run: probeStorageType },
 ];
 
-// Upper bound on how long any single probe may run before the runner gives
-// up on it and marks it `unknown`. Without this, one wedged probe hangs the
-// whole `/api/probes` response: the heaviest probe is `podman` (a dockerode
-// call over the rootless socket), which on a contended/half-up cold boot can
-// block long past the plugin proxy's 15s header watchdog — turning a slow
-// probe into the alarming "Failed to run probes: HTTP 502". 8s is comfortably
-// above the observed healthy worst case (podman ~2.7s, check-update ~10.5s
-// pre-Happy-Eyeballs but now bounded by the 5s autoSelectFamily attempt) yet
-// well under the proxy's 15s ceiling, so a single stuck probe degrades to
-// `unknown` while the other twelve still report. Env-overridable so tests can
-// shrink it without sleeping the runner; floored at 250ms.
-function probeTimeoutMs(): number {
-  const raw = Number(process.env.PROBE_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? Math.max(250, raw) : 8000;
-}
+// The per-probe ceiling now lives in ./budget.ts: the probes that make
+// several sequential network hops have to size those hops against the SAME
+// number the runner enforces here, or their real verdict loses the race below
+// and is replaced by a bare "timed out".
 
 export async function runAllProbes(): Promise<{
   ranAt: string;
