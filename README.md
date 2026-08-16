@@ -37,3 +37,26 @@ To build the production image:
 podman build -t signalk-doctor-server:dev .
 podman run --rm -p 127.0.0.1:3004:3004 -v /run/user/$UID/podman/podman.sock:/var/run/docker.sock signalk-doctor-server:dev
 ```
+
+## License
+
+signalk-doctor-server 1.0.0 and later is **source available, not open source**.
+See [LICENSE.md](LICENSE.md).
+
+**You may**, free of charge: run it on your own boat or fleet, private or
+commercial; use it for internal company operations; modify it for your own use;
+use it in non-commercial education and research; and provide professional
+services to others who use it under these terms.
+
+**You may not**: redistribute modified versions or derivative works, or publish
+them as a container image, npm package or otherwise. Unmodified official
+releases (including the published container images) may be mirrored, cached
+and redistributed verbatim as long as the notices stay intact and the license
+terms are included.
+
+Versions 0.11.0 and earlier remain available under the Apache-2.0 license, see
+[LICENSE-Apache-2.0-through-v0.x.txt](LICENSE-Apache-2.0-through-v0.x.txt).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
