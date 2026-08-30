@@ -38,6 +38,15 @@ interface UpdaterHealthBody {
   runtime?: string;
 }
 
+/** `res.json()` is typed `any` but is whatever the updater actually sent —
+ *  including `null`, which is valid JSON and would make every later property
+ *  read throw. That throw would be caught as a transport failure and reported
+ *  as `cannot reach`, blaming the route for a server that answered fine. Treat
+ *  the payload as unknown until its shape is established. */
+function isHealthBody(value: unknown): value is UpdaterHealthBody {
+  return typeof value === 'object' && value !== null;
+}
+
 /** One attempt, headers AND body inside the same abort timer.
  *
  *  Reading the body after the timer is cleared would leave the slowest part of
@@ -49,16 +58,24 @@ interface UpdaterHealthBody {
  *  handshake. Returns the parsed body; the caller never touches the stream. */
 async function fetchHealthOnce(
   timeoutMs: number,
-): Promise<{ ok: boolean; status: number; body: UpdaterHealthBody }> {
+): Promise<{ ok: boolean; status: number; body: UpdaterHealthBody | null }> {
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(UPDATER_URL, { signal: controller.signal });
-    // Don't spend the budget parsing a body we're going to discard: a non-2xx
-    // is reported by status alone, and its body may be the thing that stalls.
-    if (!res.ok) return { ok: false, status: res.status, body: {} };
-    return { ok: true, status: res.status, body: (await res.json()) as UpdaterHealthBody };
+    if (!res.ok) {
+      // Report a non-2xx by status alone — its body is unused, and it may be
+      // the very thing that stalls. But undici hands back a live stream either
+      // way, and an unconsumed one holds its connection out of the pool: three
+      // attempts per run, every /api/probes call, is a slow leak that starves
+      // the later probes. Cancelling releases it without reading it.
+      await res.body?.cancel().catch(() => {});
+      return { ok: false, status: res.status, body: null };
+    }
+    const parsed: unknown = await res.json();
+    // `null` is valid JSON; anything non-object cannot answer `ok`/`runtime`.
+    return { ok: true, status: res.status, body: isHealthBody(parsed) ? parsed : null };
   } catch (err) {
     throw new Error(describeFetchError(err, Date.now() - started), { cause: err });
   } finally {
@@ -92,6 +109,18 @@ export async function probeUpdaterHealth(): Promise<ProbeResult> {
       const body = res.body;
       const attemptMs = Date.now() - attemptStart;
       const totalMs = Date.now() - t0;
+      if (body === null) {
+        // Answered 200 but the payload wasn't a JSON object. The updater is
+        // reachable, so this must not fall through to `cannot reach` — that
+        // would send the operator after the route when the fault is the reply.
+        return {
+          id: 'updater-health',
+          label: 'Updater HTTP health',
+          status: 'warn',
+          message: `Updater reachable but returned an unreadable health payload from ${UPDATER_URL}`,
+          durationMs: totalMs,
+        };
+      }
       const runtimeNote = body.runtime ? ` (runtime=${body.runtime})` : '';
       if (!body.ok) {
         const okState = body.ok === false ? 'ok=false' : 'no ok field';

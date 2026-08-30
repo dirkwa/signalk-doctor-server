@@ -114,6 +114,47 @@ describe('probe budget', () => {
     expect(r.message).toMatch(/timed out/);
     expect(r.durationMs).toBeLessThan(probeTimeoutMs());
   });
+
+  it('reports a JSON-null health payload as reachable, not as unreachable', async () => {
+    // `null` is valid JSON. Dereferencing it threw a TypeError that the
+    // transport catch swallowed, so a 200-answering updater was reported as
+    // `cannot reach` — the route blamed for a fault in the reply.
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: null,
+        json: () => Promise.resolve(null),
+      } as unknown as Response),
+    );
+
+    const r = await probeUpdaterHealth();
+
+    expect(r.status).toBe('warn');
+    expect(r.message).toMatch(/reachable/);
+    expect(r.message).not.toMatch(/cannot reach/);
+  });
+
+  it('cancels a non-2xx body instead of leaving the connection held', async () => {
+    // An unconsumed undici stream keeps its connection out of the pool; at
+    // three attempts per run on every /api/probes call that starves the
+    // probes that follow.
+    const cancel = vi.fn().mockResolvedValue(undefined);
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve({
+        ok: false,
+        status: 503,
+        body: { cancel },
+        json: () => Promise.reject(new Error('body must not be read')),
+      } as unknown as Response),
+    );
+
+    const r = await probeUpdaterHealth();
+
+    expect(r.status).toBe('fail');
+    expect(r.message).toMatch(/HTTP 503/);
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('startProbeDeadline', () => {
