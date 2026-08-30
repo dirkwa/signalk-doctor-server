@@ -596,6 +596,16 @@ function randomHex16(): string {
  *  `crypto.getRandomValues`) plus an ISO timestamp prefix so the URL
  *  is unguessable in practice. Bins auto-expire after ~6 days
  *  regardless. */
+/** The upload never reached filebin.net — no HTTP response came back.
+ *  Distinguished from an HTTP error so the UI can say the bundle is fine and
+ *  point at the local download rather than showing a raw browser string. */
+export class UploadUnreachableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'UploadUnreachableError';
+  }
+}
+
 export async function uploadToFilebin(filename: string, blob: Blob): Promise<string> {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\..*$/, '');
   const rand = randomHex16();
@@ -604,7 +614,21 @@ export async function uploadToFilebin(filename: string, blob: Blob): Promise<str
   // Strip the blob's Content-Type so fetch doesn't auto-set a header
   // that would force a CORS preflight. See docblock above.
   const untyped = new Blob([blob], { type: '' });
-  const res = await fetch(url, { method: 'POST', body: untyped });
+  let res: Response;
+  try {
+    res = await fetch(url, { method: 'POST', body: untyped });
+  } catch (err) {
+    // A rejected fetch here is almost never a bug in the doctor: the request
+    // goes straight from the browser to filebin.net and never touches this
+    // server. The browser collapses every network-layer cause — no route to
+    // the internet, DNS failure, a captive portal, a firewall, an extension
+    // blocking file-sharing hosts — into an opaque "Failed to fetch", so the
+    // cause cannot be recovered here. Say what it means and let the caller
+    // fall back to the local download instead of surfacing the bare string.
+    throw new UploadUnreachableError(
+      `Could not reach filebin.net (${err instanceof Error ? err.message : String(err)}).`,
+    );
+  }
   if (!res.ok) {
     throw new Error(`filebin upload failed: HTTP ${res.status}`);
   }
