@@ -23,8 +23,14 @@
  *  `unknown` while the other twelve still report. Env-overridable so tests can
  *  shrink it without sleeping the runner; floored at 250ms. */
 export function probeTimeoutMs(): number {
-  const raw = Number(process.env.PROBE_TIMEOUT_MS);
-  return Number.isFinite(raw) && raw > 0 ? Math.max(250, raw) : 8000;
+  // Narrowed against `undefined` before conversion, per the repo's strict-TS
+  // rule for record entries — `Number(undefined)` is NaN, which the finite
+  // check below would catch anyway, but the explicit read keeps the intent
+  // (and the unset case) visible rather than relying on NaN falling through.
+  const raw = process.env.PROBE_TIMEOUT_MS;
+  if (raw === undefined) return 8000;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.max(250, parsed) : 8000;
 }
 
 /** Headroom held back from the ceiling so a probe that spends its entire

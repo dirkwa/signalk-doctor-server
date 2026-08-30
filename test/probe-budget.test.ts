@@ -83,6 +83,37 @@ describe('probe budget', () => {
     expect(fetchSpy.mock.calls.length).toBeLessThan(3);
     expect(fetchSpy.mock.calls.length).toBeGreaterThan(0);
   });
+
+  it('updater-health stays inside the budget when headers arrive but the body stalls', async () => {
+    // The half-open case the headers-only timeout missed: the updater answers
+    // 200 and then never finishes the body. Clearing the abort timer once
+    // headers land left `res.json()` unbounded, so the probe ran forever and
+    // the runner threw its verdict away — the same `unknown` this whole change
+    // exists to stop. The timeout must span the body read too.
+    fetchSpy.mockImplementation((_url, init) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            (init as RequestInit | undefined)?.signal?.addEventListener('abort', () => {
+              const err = new Error('This operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }),
+      } as unknown as Response),
+    );
+
+    const p = probeUpdaterHealth();
+    await vi.advanceTimersByTimeAsync(60_000);
+    const r = await p;
+
+    expect(r.status).toBe('fail');
+    expect(r.message).toMatch(/^cannot reach http/);
+    expect(r.message).toMatch(/timed out/);
+    expect(r.durationMs).toBeLessThan(probeTimeoutMs());
+  });
 });
 
 describe('startProbeDeadline', () => {

@@ -33,12 +33,32 @@ const RETRY_DELAY_MS = 1500;
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-async function fetchHealthOnce(timeoutMs: number): Promise<Response> {
+interface UpdaterHealthBody {
+  ok?: boolean;
+  runtime?: string;
+}
+
+/** One attempt, headers AND body inside the same abort timer.
+ *
+ *  Reading the body after the timer is cleared would leave the slowest part of
+ *  the request unbounded: an updater that sends headers and then stalls its
+ *  body (the shape a wedged event loop or a half-open route produces) would
+ *  hang the probe past the runner's ceiling, and the runner discards an
+ *  overrunning probe's verdict — the exact failure this budget exists to
+ *  prevent. So the timeout has to span the whole exchange, not just the
+ *  handshake. Returns the parsed body; the caller never touches the stream. */
+async function fetchHealthOnce(
+  timeoutMs: number,
+): Promise<{ ok: boolean; status: number; body: UpdaterHealthBody }> {
   const started = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(UPDATER_URL, { signal: controller.signal });
+    const res = await fetch(UPDATER_URL, { signal: controller.signal });
+    // Don't spend the budget parsing a body we're going to discard: a non-2xx
+    // is reported by status alone, and its body may be the thing that stalls.
+    if (!res.ok) return { ok: false, status: res.status, body: {} };
+    return { ok: true, status: res.status, body: (await res.json()) as UpdaterHealthBody };
   } catch (err) {
     throw new Error(describeFetchError(err, Date.now() - started), { cause: err });
   } finally {
@@ -69,7 +89,7 @@ export async function probeUpdaterHealth(): Promise<ProbeResult> {
           durationMs: Date.now() - t0,
         };
       }
-      const body = (await res.json()) as { ok?: boolean; runtime?: string };
+      const body = res.body;
       const attemptMs = Date.now() - attemptStart;
       const totalMs = Date.now() - t0;
       const runtimeNote = body.runtime ? ` (runtime=${body.runtime})` : '';
