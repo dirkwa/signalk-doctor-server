@@ -52,7 +52,7 @@
     "rimraf": "^6.0.1",
     "supertest": "^7.0.0",
     "tsx": "^4.19.0",
-    "typescript": "^6.0.0",
+    "typescript": "^7.0.2",
     "vite": "^8.0.11",
     "vitest": "^4.0.0"
   }
