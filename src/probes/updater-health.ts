@@ -111,7 +111,16 @@ export async function probeUpdaterHealth(): Promise<ProbeResult> {
   let lastErr: unknown;
   let attempts = 0;
   for (let attempt = 0; attempt <= RETRIES; attempt++) {
-    if (attempt > 0) await delay(RETRY_DELAY_MS);
+    if (attempt > 0) {
+      await delay(RETRY_DELAY_MS);
+      // Re-check after sleeping, not just before. The guard at the bottom of
+      // the loop leaves exactly MIN_HOP_MS in the best case, and setTimeout is
+      // a floor rather than a ceiling — on the loaded, contended box this
+      // probe exists to diagnose, the timer resumes late and that margin is
+      // gone. Starting the hop anyway would abort on a near-zero budget and
+      // overwrite the real connection error with a self-inflicted timeout.
+      if (!deadline.allows(MIN_HOP_MS)) break;
+    }
     attempts++;
     // Time the slow check against THIS attempt, not t0 — t0 includes failed
     // attempts and their retry delays, which would mislabel a fast success

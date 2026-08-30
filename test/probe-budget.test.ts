@@ -197,6 +197,35 @@ describe('probe budget', () => {
     expect(r.message).not.toMatch(/cannot reach/);
   });
 
+  it('does not start a hop when the retry delay overran the budget', async () => {
+    // The bottom-of-loop guard leaves exactly MIN_HOP_MS in the best case, and
+    // setTimeout is a floor, not a ceiling. On a contended box — the case this
+    // probe diagnoses — the delay resumes late and that margin is gone. The
+    // fetch would then run on a near-zero budget, abort instantly, and replace
+    // the real connection error with a synthetic timeout.
+    let calls = 0;
+    fetchSpy.mockImplementation(() => {
+      calls++;
+      return Promise.reject(
+        Object.assign(new TypeError('fetch failed'), {
+          cause: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+        }),
+      );
+    });
+
+    const p = probeUpdaterHealth();
+    await vi.advanceTimersByTimeAsync(60_000);
+    const r = await p;
+
+    // The refusal is fast, so the ladder gets its attempts; what must survive
+    // is the actionable errno, not a timeout manufactured on an empty budget.
+    expect(r.status).toBe('fail');
+    expect(r.message).toMatch(/ECONNREFUSED/);
+    expect(r.message).not.toMatch(/timed out/);
+    expect(calls).toBeGreaterThan(0);
+    expect(r.durationMs).toBeLessThan(probeTimeoutMs());
+  });
+
   it('still reports an abort during the body read as a timeout', async () => {
     // The parse-error catch must not swallow the deadline firing mid-body:
     // that is a timeout, and mislabelling it "unreadable" would throw away
@@ -244,7 +273,12 @@ describe('startProbeDeadline', () => {
   it('clamps a hop to what is left rather than granting the full ask', () => {
     process.env.PROBE_TIMEOUT_MS = '2000';
     const d = startProbeDeadline();
-    expect(d.hop(5000)).toBe(d.remaining());
+    // Read the budget first: hop() and remaining() sample the clock at
+    // different instants, so asserting they are equal fails whenever a
+    // millisecond lands between them even though the clamp is correct.
+    const before = d.remaining();
+    expect(d.hop(5000)).toBeLessThanOrEqual(before);
+    expect(d.hop(5000)).toBeGreaterThan(0);
     expect(d.hop(100)).toBe(100);
   });
 
