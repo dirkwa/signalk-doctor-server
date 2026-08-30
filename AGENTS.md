@@ -50,10 +50,17 @@ This repo is maintained by Dirk Wahrheit. Workflow is deliberate; AI tools shoul
 npm run format
 npm run build:all
 npm run ci-lint
-cr review --plain | tee cr-review-<branch>.txt
+cr review --base master > cr-review-<branch>.txt; echo "exit=$?"
 ```
 
 Save the cr output to a repo-local file (the repo `.gitignore`s `cr-review*.txt`); `cr` is rate-limited so reruns are expensive. Skip `cr review` only for `chore(release): X.Y.Z` PRs.
+
+Two things about that command are deliberate:
+
+- **No `--plain`.** It was removed in `cr` 0.7.x — plain text is now the default and the flag is a hard error. It was also piped through `tee`, which reports its own exit status, so the old form wrote a usage dump into the review file and reported success. Redirect and check the code instead of piping, so a review that never ran cannot look like a clean one.
+- **`--base master` is explicit.** Without it `cr` reviews working-tree changes, which on a committed branch is nothing at all — the same clean-looking no-op by a different route.
+
+Confirm the file holds actual findings before treating the review as done. A zero exit is not evidence a review happened.
 
 ### Release flow
 
