@@ -1,10 +1,18 @@
 import { Agent } from 'undici';
 import type { ProbeResult } from './types.js';
 import { signalkHttpUrl, signalkHttpsUrl } from './signalk-url.js';
+import { MIN_HOP_MS, startProbeDeadline, type ProbeDeadline } from './budget.js';
+import { describeFetchError } from './fetch-error.js';
 
 const ID = 'signalk-health';
 const LABEL = 'SignalK server HTTP health';
-const TIMEOUT_MS = 5000;
+// What one hop asks for. It is a ceiling, not a reservation: this probe can
+// make two sequential hops (HTTP, then HTTPS) and two full helpings would
+// overrun the runner's per-probe budget, so each hop takes the smaller of
+// this and whatever the budget has left. Before that clamp existed, an
+// unreachable host gateway spent 5s on HTTP and 5s on HTTPS and the runner
+// killed the probe at 8s, replacing `cannot reach …` with `timed out`.
+const HOP_TIMEOUT_MS = 5000;
 // Reachable but slower than this ⇒ warn "likely disk I/O" rather than a bare
 // ok. Mirrors updater-health.ts SLOW_MS. signalk-server runs Network=host so
 // this is the fast path with the most headroom; it still flags I/O stalls.
@@ -41,16 +49,19 @@ function fail(message: string, t0: number): ProbeResult {
   return { id: ID, label: LABEL, status: 'fail', message, durationMs: Date.now() - t0 };
 }
 
-/** One fetch hop with a 5s timeout. `manualRedirect` keeps signalk-server's
- *  HTTP→HTTPS 302 observable instead of auto-following it into the
- *  self-signed HTTPS handshake. `tlsRelaxed` uses the insecure dispatcher
- *  for the HTTPS hop. */
+/** One fetch hop, bounded by `timeoutMs` (the budget-clamped hop allowance).
+ *  `manualRedirect` keeps signalk-server's HTTP→HTTPS 302 observable instead
+ *  of auto-following it into the self-signed HTTPS handshake. `tlsRelaxed`
+ *  uses the insecure dispatcher for the HTTPS hop. Rejects with an
+ *  operator-readable message rather than undici's `fetch failed`. */
 async function hop(
   url: string,
   opts: { manualRedirect?: boolean; tlsRelaxed?: boolean },
+  timeoutMs: number,
 ): Promise<Response> {
+  const started = Date.now();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   // `dispatcher` is undici's; the global fetch types it via @types/node's
   // bundled undici-types, a different copy than the `undici` package we
   // import `Agent` from, so the two Dispatcher identities don't unify.
@@ -67,6 +78,8 @@ async function hop(
   if (opts.tlsRelaxed) init.dispatcher = insecureTls as unknown as FetchInit['dispatcher'];
   try {
     return await fetch(url, init);
+  } catch (err) {
+    throw new Error(describeFetchError(err, Date.now() - started), { cause: err });
   } finally {
     clearTimeout(timer);
   }
@@ -81,12 +94,13 @@ function isRedirect(res: Response): boolean {
 
 export async function probeSignalkHealth(): Promise<ProbeResult> {
   const t0 = Date.now();
+  const deadline = startProbeDeadline();
   const httpUrl = signalkHttpUrl();
   const httpsUrl = signalkHttpsUrl();
 
-  let httpErr: unknown;
+  let httpErr: string;
   try {
-    const res = await hop(httpUrl, { manualRedirect: true });
+    const res = await hop(httpUrl, { manualRedirect: true }, deadline.hop(HOP_TIMEOUT_MS));
 
     if (res.ok) {
       // SSL off: signalk-server answers directly on HTTP.
@@ -102,7 +116,13 @@ export async function probeSignalkHealth(): Promise<ProbeResult> {
           t0,
         );
       }
-      return (await probeHttps(httpsUrl, t0, 'redirect')).result;
+      if (!deadline.allows(MIN_HOP_MS)) {
+        return fail(
+          `${httpUrl} redirects to ${httpsUrl} (SSL enabled) but no probe budget remained to check it`,
+          t0,
+        );
+      }
+      return (await probeHttps(httpsUrl, t0, 'redirect', deadline)).result;
     }
 
     // Server is up but unhealthy (5xx, etc.) — surface it; don't mask
@@ -111,19 +131,24 @@ export async function probeSignalkHealth(): Promise<ProbeResult> {
   } catch (err) {
     // HTTP listener unreachable. Could be signalk-server down, or an
     // exotic config where only HTTPS is up — try HTTPS as a last resort.
-    httpErr = err;
+    httpErr = err instanceof Error ? err.message : String(err);
   }
 
-  if (httpsUrl) {
-    const viaHttps = await probeHttps(httpsUrl, t0, 'fallback');
+  // Only attempt the fallback while a hop long enough to be meaningful still
+  // fits: spending the last few hundred ms on a hop that must abort would
+  // report a self-inflicted timeout in place of the real HTTP error above.
+  const httpsAttempted = httpsUrl !== null && deadline.allows(MIN_HOP_MS);
+  if (httpsUrl && httpsAttempted) {
+    const viaHttps = await probeHttps(httpsUrl, t0, 'fallback', deadline);
     // HTTPS answered: report it — ok, or a reachable-but-unhealthy
     // status that's more informative than the HTTP-refused error below.
     if (viaHttps.reachable) return viaHttps.result;
   }
 
-  const msg = httpErr instanceof Error ? httpErr.message : String(httpErr);
-  const tried = httpsUrl ? `${httpUrl} or ${httpsUrl}` : httpUrl;
-  return fail(`cannot reach signalk-server on ${tried}: ${msg}`, t0);
+  const tried = httpsAttempted ? `${httpUrl} or ${httpsUrl}` : httpUrl;
+  const skipped =
+    httpsUrl && !httpsAttempted ? ` (HTTPS fallback to ${httpsUrl} skipped, no budget left)` : '';
+  return fail(`cannot reach signalk-server on ${tried}: ${httpErr}${skipped}`, t0);
 }
 
 /** Fetch the HTTPS endpoint with TLS verification relaxed. `reason`
@@ -136,9 +161,10 @@ async function probeHttps(
   httpsUrl: string,
   t0: number,
   reason: 'redirect' | 'fallback',
+  deadline: ProbeDeadline,
 ): Promise<{ result: ProbeResult; reachable: boolean }> {
   try {
-    const res = await hop(httpsUrl, { tlsRelaxed: true });
+    const res = await hop(httpsUrl, { tlsRelaxed: true }, deadline.hop(HOP_TIMEOUT_MS));
     if (res.ok) {
       const note =
         reason === 'redirect' ? ' (SSL enabled, redirected from HTTP)' : ' (SSL enabled)';

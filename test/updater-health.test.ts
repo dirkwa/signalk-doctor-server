@@ -52,16 +52,18 @@ describe('probeUpdaterHealth', () => {
 
   it("downgrades a slow-but-healthy response to 'warn' with the I/O hint", async () => {
     // Make the per-attempt clock jump past SLOW_MS (4000), into the warn band
-    // below TIMEOUT_MS (5000), without real waiting.
-    // Probe call order: t0, attemptStart, attemptMs-end, totalMs-end.
+    // below TIMEOUT_MS (5000), without real waiting. Drive a controllable
+    // clock that the fetch itself advances — a slow response IS time passing
+    // inside the fetch — rather than scripting Date.now() call-by-call, which
+    // silently mis-fires whenever the probe changes how often it reads it.
     const base = 1_000_000;
-    const nowSpy = vi
-      .spyOn(Date, 'now')
-      .mockReturnValueOnce(base) // t0
-      .mockReturnValueOnce(base) // attemptStart
-      .mockReturnValue(base + 4500); // attempt end + total end
+    let now = base;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
     try {
-      fetchSpy.mockResolvedValueOnce(jsonRes({ ok: true, runtime: 'podman' }));
+      fetchSpy.mockImplementationOnce(() => {
+        now = base + 4500;
+        return Promise.resolve(jsonRes({ ok: true, runtime: 'podman' }));
+      });
       const r = await probeUpdaterHealth();
       expect(r.status).toBe('warn');
       expect(r.message).toMatch(/slow \(4500ms\)/);
