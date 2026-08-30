@@ -6,7 +6,7 @@ import {
   fmtSize,
   saveBlob,
   uploadToFilebin,
-  UploadUnreachableError,
+  UploadUnconfirmedError,
   type ApiError,
 } from '../api';
 
@@ -76,15 +76,15 @@ export function BugReport() {
       const url = await uploadToFilebin(report.filename, report.blob);
       setFilebinUrl(url);
     } catch (err) {
-      if (err instanceof UploadUnreachableError) {
+      if (err instanceof UploadUnconfirmedError) {
         // The bundle itself is fine — it is in the browser and on the host.
-        // Only the hop to filebin.net failed, so the actionable answer is the
-        // local download, not the error text.
+        // Only the hop to filebin.net is in doubt, so the actionable answer is
+        // the local download, not the error text.
         setUploadErr(
           `${err.message}\n\n` +
-            'This box needs internet access to reach filebin.net; the bug report itself was ' +
-            'created successfully. Use "Download locally" below to save it and attach it to ' +
-            'the issue by hand.\n\n' +
+            'Usually this means the box has no internet route to filebin.net. The bug report ' +
+            'itself was created successfully. Use "Download locally" below to save it and ' +
+            'attach it to the issue by hand.\n\n' +
             `It is also on the Signal K host at ~/.signalk-doctor/bug-reports/${report.filename} ` +
             '— fetch it over SSH if this browser cannot save it. Only the newest few bundles ' +
             'are kept, so grab it before running another bug report.',
@@ -197,9 +197,16 @@ export function BugReport() {
               </Button>
               {uploadErr !== null && (
                 <Alert color="danger" className="mt-2 mb-0">
-                  <pre className="mb-0 small text-wrap">{uploadErr}</pre>
+                  {/* Not a <pre className="text-wrap">: Bootstrap's .text-wrap
+                      forces white-space: normal, collapsing the blank lines
+                      between paragraphs. Render each one as its own element. */}
+                  {uploadErr.split('\n\n').map((para, i) => (
+                    <p key={i} className="small mb-2 text-break">
+                      {para}
+                    </p>
+                  ))}
                   {report !== null && (
-                    <Button color="primary" size="sm" className="mt-2" onClick={downloadCached}>
+                    <Button color="primary" size="sm" className="mb-0" onClick={downloadCached}>
                       Download locally
                     </Button>
                   )}

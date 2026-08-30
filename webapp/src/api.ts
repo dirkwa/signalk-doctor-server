@@ -596,13 +596,16 @@ function randomHex16(): string {
  *  `crypto.getRandomValues`) plus an ISO timestamp prefix so the URL
  *  is unguessable in practice. Bins auto-expire after ~6 days
  *  regardless. */
-/** The upload never reached filebin.net — no HTTP response came back.
- *  Distinguished from an HTTP error so the UI can say the bundle is fine and
- *  point at the local download rather than showing a raw browser string. */
-export class UploadUnreachableError extends Error {
+/** The upload's outcome is unknown: fetch rejected, so no HTTP status came
+ *  back. Usually the request never left the box, but a simple cross-origin
+ *  POST is sent before the browser inspects the response, so the bin may in
+ *  fact exist. Distinguished from an HTTP error so the UI can say the bundle
+ *  itself is fine and point at the local download instead of showing a raw
+ *  browser string. */
+export class UploadUnconfirmedError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'UploadUnreachableError';
+    this.name = 'UploadUnconfirmedError';
   }
 }
 
@@ -618,15 +621,19 @@ export async function uploadToFilebin(filename: string, blob: Blob): Promise<str
   try {
     res = await fetch(url, { method: 'POST', body: untyped });
   } catch (err) {
-    // A rejected fetch here is almost never a bug in the doctor: the request
-    // goes straight from the browser to filebin.net and never touches this
-    // server. The browser collapses every network-layer cause — no route to
-    // the internet, DNS failure, a captive portal, a firewall, an extension
+    // A rejected fetch here is not a fault in the doctor: the request goes
+    // straight from the browser to filebin.net and never touches this server.
+    // The browser collapses every network-layer cause — no route to the
+    // internet, DNS failure, a captive portal, a firewall, an extension
     // blocking file-sharing hosts — into an opaque "Failed to fetch", so the
-    // cause cannot be recovered here. Say what it means and let the caller
-    // fall back to the local download instead of surfacing the bare string.
-    throw new UploadUnreachableError(
-      `Could not reach filebin.net (${err instanceof Error ? err.message : String(err)}).`,
+    // cause cannot be recovered here.
+    //
+    // Nor can the outcome: a simple POST (no preflight — see the docblock
+    // above) is sent before the browser checks the response, so a rejection
+    // does not prove the bin is absent. Claim only what is certain — that the
+    // result is unconfirmed — and let the caller offer the local download.
+    throw new UploadUnconfirmedError(
+      `Could not confirm the upload to filebin.net (${err instanceof Error ? err.message : String(err)}).`,
     );
   }
   if (!res.ok) {
