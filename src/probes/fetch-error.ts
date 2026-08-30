@@ -23,7 +23,7 @@ export function describeFetchError(err: unknown, waitedMs: number): string {
 
 /** An abort can arrive as a real `AbortError` from undici or, in tests and
  *  older runtimes, as a plain Error carrying only the message — match both. */
-function isAbort(err: unknown): boolean {
+export function isAbort(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   return err.name === 'AbortError' || /operation was aborted/i.test(err.message);
 }

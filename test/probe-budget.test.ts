@@ -155,6 +155,76 @@ describe('probe budget', () => {
     expect(r.message).toMatch(/HTTP 503/);
     expect(cancel).toHaveBeenCalledTimes(1);
   });
+
+  it('does not call a string "false" healthy', async () => {
+    // `{ ok: "false" }` is truthy, so a non-null check alone sent an updater
+    // that had just declared itself unhealthy down the healthy branch and
+    // printed "Updater reports OK" — the engine stating the opposite of what
+    // the service said.
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: null,
+        json: () => Promise.resolve({ ok: 'false', runtime: 'podman' }),
+      } as unknown as Response),
+    );
+
+    const r = await probeUpdaterHealth();
+
+    expect(r.status).not.toBe('ok');
+    expect(r.message).not.toMatch(/reports OK/);
+    expect(r.message).toMatch(/reachable/);
+  });
+
+  it('treats malformed JSON as reachable-but-unreadable, not unreachable', async () => {
+    // The same misdiagnosis as the null payload, reached by another route:
+    // res.json() rejecting fell into the transport catch and reported
+    // `cannot reach` for an updater that answered 200.
+    fetchSpy.mockImplementation(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: null,
+        json: () => Promise.reject(new SyntaxError('Unexpected token < in JSON')),
+      } as unknown as Response),
+    );
+
+    const r = await probeUpdaterHealth();
+
+    expect(r.status).toBe('warn');
+    expect(r.message).toMatch(/reachable/);
+    expect(r.message).not.toMatch(/cannot reach/);
+  });
+
+  it('still reports an abort during the body read as a timeout', async () => {
+    // The parse-error catch must not swallow the deadline firing mid-body:
+    // that is a timeout, and mislabelling it "unreadable" would throw away
+    // the diagnosis this whole budget exists to produce.
+    fetchSpy.mockImplementation((_url, init) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        body: null,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            (init as RequestInit | undefined)?.signal?.addEventListener('abort', () => {
+              const err = new Error('This operation was aborted');
+              err.name = 'AbortError';
+              reject(err);
+            });
+          }),
+      } as unknown as Response),
+    );
+
+    const p = probeUpdaterHealth();
+    await vi.advanceTimersByTimeAsync(60_000);
+    const r = await p;
+
+    expect(r.status).toBe('fail');
+    expect(r.message).toMatch(/timed out/);
+    expect(r.durationMs).toBeLessThan(probeTimeoutMs());
+  });
 });
 
 describe('startProbeDeadline', () => {

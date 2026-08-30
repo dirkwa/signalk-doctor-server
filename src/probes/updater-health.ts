@@ -1,6 +1,6 @@
 import type { ProbeResult } from './types.js';
 import { MIN_HOP_MS, startProbeDeadline } from './budget.js';
-import { describeFetchError } from './fetch-error.js';
+import { describeFetchError, isAbort } from './fetch-error.js';
 
 // Same reasoning as signalk-health.ts: 127.0.0.1 is the doctor's own
 // container, not the host. Reach the updater via Podman's host gateway.
@@ -38,13 +38,21 @@ interface UpdaterHealthBody {
   runtime?: string;
 }
 
-/** `res.json()` is typed `any` but is whatever the updater actually sent —
- *  including `null`, which is valid JSON and would make every later property
- *  read throw. That throw would be caught as a transport failure and reported
- *  as `cannot reach`, blaming the route for a server that answered fine. Treat
- *  the payload as unknown until its shape is established. */
+/** `res.json()` is typed `any` but is whatever the updater actually sent, so
+ *  the fields are checked rather than assumed.
+ *
+ *  Type matters as much as presence here: `{ ok: "false" }` is truthy, so a
+ *  merely non-null check would send a string-`"false"` — an updater explicitly
+ *  reporting itself unhealthy — down the healthy branch and print
+ *  `Updater reports OK`. A diagnostics engine stating the opposite of what the
+ *  service just said is worse than one saying nothing. Arrays are rejected for
+ *  the same reason: `[]` is a non-null object that can never answer `ok`. */
 function isHealthBody(value: unknown): value is UpdaterHealthBody {
-  return typeof value === 'object' && value !== null;
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const { ok, runtime } = value as { ok?: unknown; runtime?: unknown };
+  if (ok !== undefined && typeof ok !== 'boolean') return false;
+  if (runtime !== undefined && typeof runtime !== 'string') return false;
+  return true;
 }
 
 /** One attempt, headers AND body inside the same abort timer.
@@ -73,8 +81,22 @@ async function fetchHealthOnce(
       await res.body?.cancel().catch(() => {});
       return { ok: false, status: res.status, body: null };
     }
-    const parsed: unknown = await res.json();
-    // `null` is valid JSON; anything non-object cannot answer `ok`/`runtime`.
+    // A malformed body must not reach the transport catch below: `res.json()`
+    // rejecting there would be reported as `cannot reach`, blaming the route
+    // for a server that answered. Reaching the updater and failing to
+    // understand it are different diagnoses and have to stay that way, so a
+    // parse failure lands on the same reachable-but-unreadable path as a
+    // well-formed body of the wrong shape.
+    let parsed: unknown;
+    try {
+      parsed = await res.json();
+    } catch (err) {
+      // …except an abort, which is the deadline firing mid-body. That is a
+      // timeout, not a malformed payload, and calling it "unreadable" would
+      // discard the very diagnosis this budget exists to produce.
+      if (isAbort(err)) throw err;
+      return { ok: true, status: res.status, body: null };
+    }
     return { ok: true, status: res.status, body: isHealthBody(parsed) ? parsed : null };
   } catch (err) {
     throw new Error(describeFetchError(err, Date.now() - started), { cause: err });
