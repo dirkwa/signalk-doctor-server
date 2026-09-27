@@ -240,7 +240,6 @@ describe('installer-refresh routes', () => {
     const bluetoothBody = await readFile(join(hostBin, 'signalk-bluetooth'), 'utf8');
     expect(bluetoothBody).toBe(BLUETOOTH_TMPL);
 
-    // So do the HALPI2 and kiosk helpers.
     expect(await readFile(join(hostBin, 'signalk-halpi2'), 'utf8')).toBe(HALPI2_TMPL);
     expect(await readFile(join(hostBin, 'signalk-kiosk'), 'utf8')).toBe(KIOSK_TMPL);
 
