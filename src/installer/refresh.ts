@@ -94,6 +94,25 @@ function artifacts(): ArtifactDescriptor[] {
       kind: 'host-script',
     },
     {
+      // Hat Labs HALPI2 helper. No placeholders; written byte-for-byte so
+      // `signalk halpi2` on the host matches the published installer.
+      id: 'signalk-halpi2',
+      remotePath: 'installer/linux/signalk-halpi2.tmpl',
+      destPath: join(hb, 'signalk-halpi2'),
+      mode: 0o755,
+      kind: 'host-script',
+    },
+    {
+      // Kiosk helper (installer PR #289). Same shape; a box installed before
+      // the kiosk existed gets `signalk kiosk` from a refresh rather than a
+      // re-run of the bash installer.
+      id: 'signalk-kiosk',
+      remotePath: 'installer/linux/signalk-kiosk.tmpl',
+      destPath: join(hb, 'signalk-kiosk'),
+      mode: 0o755,
+      kind: 'host-script',
+    },
+    {
       id: 'detect-hardware',
       // The detect-hardware script is fetched but not invoked by the doctor —
       // it needs host devices (/dev/serial/by-id, /proc/device-tree/model, the

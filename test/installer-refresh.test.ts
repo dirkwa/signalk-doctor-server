@@ -26,6 +26,14 @@ const BLUETOOTH_TMPL = `#!/usr/bin/env bash
 echo "signalk-bluetooth"
 `;
 
+const HALPI2_TMPL = `#!/usr/bin/env bash
+echo "signalk-halpi2"
+`;
+
+const KIOSK_TMPL = `#!/usr/bin/env bash
+echo "signalk-kiosk"
+`;
+
 const QUADLET_TMPL = `[Unit]
 Description=Test
 [Container]
@@ -58,6 +66,14 @@ const FIXTURES: Record<string, RouteFixture> = {
   '/installer/linux/signalk-bluetooth.tmpl': {
     expectedSubstr: 'signalk-bluetooth',
     body: BLUETOOTH_TMPL,
+  },
+  '/installer/linux/signalk-halpi2.tmpl': {
+    expectedSubstr: 'signalk-halpi2',
+    body: HALPI2_TMPL,
+  },
+  '/installer/linux/signalk-kiosk.tmpl': {
+    expectedSubstr: 'signalk-kiosk',
+    body: KIOSK_TMPL,
   },
   '/installer/linux/detect-hardware.sh': { expectedSubstr: 'detectedAt', body: DETECT_SCRIPT },
   '/installer/linux/render-server-quadlet.sh': {
@@ -181,7 +197,7 @@ describe('installer-refresh routes', () => {
     const body = res.json();
     expect(body.hostBinMounted).toBe(true);
     expect(body.pagesBase).toBe(pages.baseUrl);
-    expect(body.artifacts).toHaveLength(10);
+    expect(body.artifacts).toHaveLength(12);
     expect(body.artifacts.every((a: { present: boolean }) => a.present === false)).toBe(true);
     await app.close();
   });
@@ -202,7 +218,7 @@ describe('installer-refresh routes', () => {
     });
     expect(res.statusCode).toBe(200);
     const body = res.json();
-    expect(body.counts.updated).toBe(10);
+    expect(body.counts.updated).toBe(12);
     expect(body.counts['fetch-failed']).toBe(0);
     expect(body.counts['mount-missing']).toBe(0);
 
@@ -223,6 +239,9 @@ describe('installer-refresh routes', () => {
     // bluetooth helper follows the same no-substitution contract.
     const bluetoothBody = await readFile(join(hostBin, 'signalk-bluetooth'), 'utf8');
     expect(bluetoothBody).toBe(BLUETOOTH_TMPL);
+
+    expect(await readFile(join(hostBin, 'signalk-halpi2'), 'utf8')).toBe(HALPI2_TMPL);
+    expect(await readFile(join(hostBin, 'signalk-kiosk'), 'utf8')).toBe(KIOSK_TMPL);
 
     // Quadlet templates are NOT substituted by the doctor; they're written
     // verbatim into the payload dir for the bash installer's render step.
@@ -256,7 +275,7 @@ describe('installer-refresh routes', () => {
     });
     expect(res2.statusCode).toBe(200);
     const body2 = res2.json();
-    expect(body2.counts.unchanged).toBe(10);
+    expect(body2.counts.unchanged).toBe(12);
     expect(body2.counts.updated).toBe(0);
 
     const secondSnapshots = await readdir(join(dir, 'installer-snapshots')).catch(
@@ -303,7 +322,7 @@ describe('installer-refresh routes', () => {
       });
       expect(res.statusCode).toBe(200);
       const body = res.json();
-      expect(body.counts['mount-missing']).toBe(4); // signalk + recovery + socketcan + bluetooth
+      expect(body.counts['mount-missing']).toBe(6); // signalk, recovery, socketcan, bluetooth, halpi2, kiosk
       expect(body.counts.updated).toBe(6); // detect + render-server-quadlet + 4 quadlets
       await app.close();
     } finally {
