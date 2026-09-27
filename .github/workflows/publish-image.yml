@@ -22,13 +22,28 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/signalk-doctor-server
 
 jobs:
+  # A tag push is filtered to version tags by the trigger above; a manual run
+  # is not, and can name any branch or tag. Every job below waits for this
+  # check, so a ref that is not a vX.Y.Z tag, with or without a pre-release
+  # part, creates no Release and pushes no image.
+  version:
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ ! "$REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$REF is not a vX.Y.Z tag; nothing is published."
+            exit 1
+          fi
+
   # release-please creates the GitHub Release for a real version, so only a
   # hand-pushed pre-release tag needs one made here; running for every tag
   # would collide with the Release that already exists. A stable tag has no
-  # `-`, which is also what the tag globs above distinguish. The ref check
-  # keeps a manual run on a branch from making a Release named after it.
+  # `-`, which is also what the tag globs above distinguish.
   release:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') && contains(github.ref_name, '-') }}
+    needs: version
+    if: ${{ contains(github.ref_name, '-') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -48,10 +63,9 @@ jobs:
   # No `needs: release`: that job is pre-release-only, and a real release
   # must still build and push its image when it is skipped. Both this job and
   # merge read github.ref_name directly, so neither depends on anything
-  # release produces. The image is tagged from that ref, so a manual run on a
-  # branch builds nothing; merge needs this job and is skipped with it.
+  # release produces.
   build:
-    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    needs: version
     strategy:
       fail-fast: false
       matrix:

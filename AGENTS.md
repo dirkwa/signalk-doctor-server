@@ -69,13 +69,13 @@ This command encodes a version-specific `cr` contract, which is what went stale 
 
 release-please owns the release. Merging a releasable commit to master opens a `chore(release): X.Y.Z` PR that bumps `package.json`; merging that creates the tag and the GitHub Release, then dispatches `publish-image.yml` on the tag. The release PR is opened with `GITHUB_TOKEN`, so CI does not run on it.
 
-That workflow builds the multi-arch image and pushes `ghcr.io/dirkwa/signalk-doctor-server:X.Y.Z` plus moving tags: `:X.Y`, `:X` and `:latest` for a stable version, and `:beta` for a `-beta.`/`-rc.` one. A pre-release carrying any other identifier gets its exact version tag and no moving tag. The package is `private`, so the image is the release artifact — nothing goes to npm.
+That workflow builds the multi-arch image and pushes `ghcr.io/dirkwa/signalk-doctor-server:X.Y.Z` plus the moving tags `:X.Y`, `:X` and `:latest` for a stable version, and `:beta` for a beta or release candidate; its "Compute tags" step decides which. The package is `private`, so the image is the release artifact — nothing goes to npm.
 
 Merging the release PR is what publishes the image, so it needs explicit approval like any other publish. The bump follows the commit type — `feat` minor, `fix`/`perf` patch, `!` or a `BREAKING CHANGE:` footer major; a `Release-As: X.Y.Z` footer pins a specific version instead.
 
-A release is only proposed when the push carries a commit users get — `feat`, `fix`, `perf`, a revert, any `type!`, a `BREAKING CHANGE:` or `Release-As:` footer, or `build(deps)`. Pure `chore`, `docs`, `ci`, `test` and `build(deps-dev)` do not. See the `gate` job in `.github/workflows/release-please.yml`.
+A release is only proposed when a push carries a commit users get; the `gate` job in `.github/workflows/release-please.yml` decides which commits count, and running that workflow by hand skips it.
 
-Pre-release tags (`vX.Y.Z-beta.N`, `vX.Y.Z-rc.N`) are still pushed by hand; only those get their GitHub Release created by `publish-image.yml`.
+Pre-release tags (`vX.Y.Z-beta.N` and the like) are still pushed by hand, and `publish-image.yml` creates their GitHub Release.
 
 ## TypeScript
 
@@ -127,7 +127,7 @@ Pre-release tags (`vX.Y.Z-beta.N`, `vX.Y.Z-rc.N`) are still pushed by hand; only
 | `Dockerfile`                                                                                                                                                          | Multi-stage Node 24 on Debian 13 (trixie-slim). Runtime needs `busctl` from the systemd apt package, so we're not on Alpine.                                                                                                                                           |
 | `.github/workflows/ci.yml`                                                                                                                                            | PR lint + build + test.                                                                                                                                                                                                                                                |
 | `.github/workflows/publish-image.yml`                                                                                                                                 | Multi-arch buildx → GHCR, run on the tag: dispatched by release-please for a release, started by a hand-pushed pre-release tag, which also gets its GitHub Release here.                                                                                               |
-| `.github/workflows/release-please.yml`                                                                                                                                | Release PR, tag and GitHub Release via release-please, run only for pushes carrying a releasable commit; dispatches `publish-image.yml` on the new tag.                                                                                                                |
+| `.github/workflows/release-please.yml`                                                                                                                                | Release PR, tag and GitHub Release via release-please, run for a push carrying a releasable commit or by hand; dispatches `publish-image.yml` on the new tag.                                                                                                          |
 | `.github/workflows/label-by-title.yml`                                                                                                                                | Labels a PR from its conventional-commit title, so `.github/release.yml` can sort the release notes.                                                                                                                                                                   |
 
 ## Container mounts (final shape)
