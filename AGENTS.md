@@ -67,7 +67,7 @@ This command encodes a version-specific `cr` contract, which is what went stale 
 
 ### Release flow
 
-release-please owns the release. Merging a releasable commit to master opens a `chore(release): X.Y.Z` PR that bumps `package.json`; merging that creates the tag and the GitHub Release, then dispatches `publish-image.yml` on the tag. The release PR is opened with `GITHUB_TOKEN`, so CI does not run on it.
+release-please owns the release. Merging a releasable commit to master opens a `chore(release): X.Y.Z` PR that bumps `package.json`; merging that creates the tag and the GitHub Release, then dispatches `publish-image.yml` on the tag.
 
 That workflow builds the multi-arch image and pushes `ghcr.io/dirkwa/signalk-doctor-server:X.Y.Z` plus the moving tags `:X.Y`, `:X` and `:latest` for a stable version, and `:beta` for a beta or release candidate; its "Compute tags" step decides which. The package is `private`, so the image is the release artifact — nothing goes to npm.
 
