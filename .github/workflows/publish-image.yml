@@ -22,7 +22,28 @@ env:
   IMAGE: ghcr.io/${{ github.repository_owner }}/signalk-doctor-server
 
 jobs:
+  # A tag push is filtered to version tags by the trigger above; a manual run
+  # is not, and can name any branch or tag. Every job below waits for this
+  # check, so a ref that is not a vX.Y.Z tag, with or without a pre-release
+  # part, creates no Release and pushes no image.
+  version:
+    runs-on: ubuntu-24.04
+    steps:
+      - env:
+          REF: ${{ github.ref }}
+        run: |
+          if [[ ! "$REF" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::$REF is not a vX.Y.Z tag; nothing is published."
+            exit 1
+          fi
+
+  # release-please creates the GitHub Release for a real version, so only a
+  # hand-pushed pre-release tag needs one made here; running for every tag
+  # would collide with the Release that already exists. A stable tag has no
+  # `-`, which is also what the tag globs above distinguish.
   release:
+    needs: version
+    if: ${{ contains(github.ref_name, '-') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
@@ -35,12 +56,16 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
           generate_release_notes: true
-          prerelease: ${{ contains(github.ref_name, '-beta.') || contains(github.ref_name, '-rc.') }}
+          prerelease: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # No `needs: release`: that job is pre-release-only, and a real release
+  # must still build and push its image when it is skipped. Both this job and
+  # merge read github.ref_name directly, so neither depends on anything
+  # release produces.
   build:
-    needs: release
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -122,12 +147,16 @@ jobs:
           set -euo pipefail
           v="${REF_NAME#v}"
           tags=("${{ env.IMAGE }}:$v")
-          if [[ "$v" == *-beta.* || "$v" == *-rc.* ]]; then
-            tags+=("${{ env.IMAGE }}:beta")
+          # Any pre-release part keeps a version off :X.Y, :X and :latest, the
+          # same test the release job uses; of the pre-releases, only -beta.
+          # and -rc. get :beta.
+          if [[ "$v" == *-* ]]; then
+            if [[ "$v" == *-beta.* || "$v" == *-rc.* ]]; then
+              tags+=("${{ env.IMAGE }}:beta")
+            fi
           else
-            base="${v%%-*}"
-            major="${base%%.*}"
-            tmp="${base#*.}"
+            major="${v%%.*}"
+            tmp="${v#*.}"
             minor="${tmp%%.*}"
             tags+=("${{ env.IMAGE }}:$major.$minor" "${{ env.IMAGE }}:$major" "${{ env.IMAGE }}:latest")
           fi
