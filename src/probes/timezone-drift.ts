@@ -11,7 +11,8 @@ import { readHostTimezone, type HostTimezoneResult } from '../host-timezone.js';
 //      (podman --tz=local writes /etc/localtime once; a running container
 //      never re-reads it). This is the layer that LAGS after a host change.
 //   3. PEER container zones — the TZ env signalk-container injects into
-//      questdb/grafana/Node-RED at ensureRunning; re-applied only on recreate.
+//      every container it manages at ensureRunning; re-applied only on
+//      recreate.
 //
 // signalk-container publishes no queryable "active zone", so the doctor
 // assembles the comparison itself. The fix for any drift is the same:
@@ -32,10 +33,15 @@ const UTC_ZONES = new Set([
   'Etc/Universal',
 ]);
 
-// Peer containers whose zone signalk-container manages. Enumerated from the
-// runtime (only those actually present are checked) — this is the label set
-// we recognize, not a hard requirement that they exist.
-const KNOWN_PEERS = ['questdb', 'grafana', 'node-red', 'wyoming-satellite'];
+// signalk-container names every container it manages `sk-<name>` and every
+// one-shot helper job `sk-job-<id>` (its default namespace). Peers are listed
+// from the runtime under that prefix, never guessed by name: a guessed name
+// misses the real container and costs a 404 inspect on every probe run. Jobs
+// are short-lived workers, not peers whose zone matters. A dev instance on a
+// non-default SIGNALK_CONTAINER_NAMESPACE uses another prefix and is not
+// checked.
+const MANAGED_PREFIX = 'sk-';
+const JOB_PREFIX = 'sk-job-';
 
 export interface TimezoneSources {
   host: HostTimezoneResult;
@@ -43,9 +49,9 @@ export interface TimezoneSources {
    *  null when it can't be read (container down / exec failed). */
   server: string | null;
   serverError: string | null;
-  /** TZ env of each PRESENT managed peer. The value is null when the peer is
-   *  running but has no TZ set — a propagation failure we must surface, not
-   *  hide. Absent (not-installed) peers are simply not keys here. */
+  /** TZ env of each RUNNING managed peer, keyed by container name. The value
+   *  is null when the peer has no TZ set — a propagation failure we must
+   *  surface, not hide. Stopped or absent peers are simply not keys here. */
   peers: Record<string, string | null>;
   peerError: string | null;
 }
@@ -94,23 +100,54 @@ export async function readServerZone(): Promise<{ zone: string | null; error: st
   };
 }
 
-/** Read the TZ env of each present managed peer container via inspect. A
- *  present peer with no TZ maps to null (surfaced as a propagation failure);
- *  a not-installed peer is omitted. */
+/** Names of the managed peers in a `listContainers` response, narrowed
+ *  rather than asserted (CC-6 posture). Docker and podman's compat API both
+ *  report names with a leading slash. */
+function managedPeerNames(listed: unknown[]): string[] {
+  const names = new Set<string>();
+  for (const entry of listed) {
+    const raw = isRecord(entry) ? entry.Names : undefined;
+    if (!Array.isArray(raw)) continue;
+    for (const n of raw) {
+      if (typeof n !== 'string') continue;
+      const name = n.startsWith('/') ? n.slice(1) : n;
+      if (name.startsWith(MANAGED_PREFIX) && !name.startsWith(JOB_PREFIX)) names.add(name);
+    }
+  }
+  return [...names].sort();
+}
+
+/** Read the TZ env of each running managed peer container: one list call,
+ *  then an inspect per listed peer. A peer with no TZ maps to null (surfaced
+ *  as a propagation failure). A stopped peer is not listed — its zone affects
+ *  nothing until it runs. */
 export async function readPeerZones(): Promise<{
   peers: Record<string, string | null>;
   error: string | null;
 }> {
   const rt = await resolveRuntime();
   if (!rt) return { peers: {}, error: null };
+  // The name filter is a substring match; managedPeerNames enforces the prefix.
+  const listed = await safe(() =>
+    rt.client.listContainers({ filters: { name: [MANAGED_PREFIX] } }),
+  );
+  if (!listed.ok) {
+    return {
+      peers: {},
+      error: `listing containers: ${listed.error.kind}: ${listed.error.userMessage}`,
+    };
+  }
+  if (!Array.isArray(listed.value)) {
+    return { peers: {}, error: 'malformed container list response (not an array)' };
+  }
   const peers: Record<string, string | null> = {};
   // Accumulate errors across peers instead of bailing on the first one: a
   // single unreachable/malformed peer must not hide a later peer's real drift.
   const errors: string[] = [];
-  for (const name of KNOWN_PEERS) {
+  for (const name of managedPeerNames(listed.value)) {
     const res = await safe(() => rt.client.getContainer(name).inspect());
     if (!res.ok) {
-      if (res.error.kind === 'not-found') continue; // peer not installed — benign
+      if (res.error.kind === 'not-found') continue; // removed since the list — benign
       errors.push(`${name}: ${res.error.kind}: ${res.error.userMessage}`);
       continue;
     }
