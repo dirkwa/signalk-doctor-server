@@ -20,17 +20,21 @@ import { readServerZone, readPeerZones } from '../src/probes/timezone-drift.js';
  *  Error → thrown); by default it lists every `behavior` key, Docker-style
  *  with a leading slash. getContainer(name).inspect() is driven by
  *  `behavior[name]`: an object → resolved inspect value; an Error → thrown;
- *  absent → not-found. `inspected` records every name asked for. */
+ *  absent → not-found. `inspected` records every name asked for, and
+ *  `listOptions` every options object listContainers() was called with. */
 function fakeRuntime(
   behavior: Record<string, unknown | Error>,
   listed: unknown = Object.keys(behavior).map((name) => ({ Names: [`/${name}`] })),
 ) {
   const inspected: string[] = [];
+  const listOptions: unknown[] = [];
   return {
     kind: 'podman',
     inspected,
+    listOptions,
     client: {
-      listContainers: async () => {
+      listContainers: async (options?: unknown) => {
+        listOptions.push(options);
         if (listed instanceof Error) throw listed;
         return listed;
       },
@@ -112,6 +116,16 @@ describe('readPeerZones', () => {
     const r = await readPeerZones();
     expect(r.peers).toEqual({ 'sk-whisper': 'Europe/Berlin' });
     expect(rt.inspected).toEqual(['sk-whisper']);
+  });
+
+  it('lists running containers only', async () => {
+    // A stopped peer's zone has no effect until it runs; listing with
+    // `all: true` would report it as drift.
+    const rt = fakeRuntime({});
+    resolveRuntime.mockResolvedValue(rt);
+    await readPeerZones();
+    expect(rt.listOptions).toHaveLength(1);
+    expect(rt.listOptions[0]).not.toHaveProperty('all', true);
   });
 
   it('reports a failed list as an error with no peers', async () => {
