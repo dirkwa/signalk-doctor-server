@@ -45,7 +45,13 @@ ENV NODE_ENV=production \
 #           for daemon-reload + unit start/stop/restart. We do NOT run
 #           systemd inside the container; we only use its client tool.
 # dbus    — libdbus client libs that busctl links against.
+#
+# The upgrade applies Debian security fixes published since the base image
+# was built, so a release ships the fixes available on the day it is built.
+# publish-image.yml builds this stage without the layer cache, or a cached
+# layer would replay the package set of an earlier build.
 RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade --with-new-pkgs -y \
  && apt-get install -y --no-install-recommends tini ca-certificates systemd dbus \
  && rm -rf /var/lib/apt/lists/* \
  # Drop the npm that node:24-trixie-slim bundles. The runtime entrypoint is

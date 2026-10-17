@@ -101,6 +101,10 @@ jobs:
           sbom: true
           cache-from: type=gha,scope=${{ matrix.arch }}
           cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+          # The runtime stage's apt-get upgrade must run on every release: a
+          # cached layer would ship the Debian packages of an earlier build.
+          # The build and deps stages keep the cache.
+          no-cache-filters: runtime
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           labels: |
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
