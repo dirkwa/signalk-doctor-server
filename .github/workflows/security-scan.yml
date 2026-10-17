@@ -1,22 +1,27 @@
 name: Security Scan
 
-# Trivy CVE scan of the container image.
+# Trivy CVE scan of the published image.
 #
-# Builds the amd64 image from the current Dockerfile and scans it for known
-# vulnerabilities in two layers:
+# Scans `:latest`, the newest release an install can switch to, in two
+# layers:
 #   - npm packages baked into node_modules (the build/deps stages)
 #   - the node:24-trixie-slim base + the apt packages the runtime stage
 #     installs (tini, ca-certificates, systemd, dbus)
 # A newly-disclosed CVE in the base or those packages surfaces here even when
 # no code changed — coverage neither `npm audit` nor Dependabot provides.
+# Scanning the release rather than a fresh build makes an open alert mean
+# the released image is affected, and it stays open until a release ships
+# the fix. The amd64 variant is scanned; the arm64 one is built from
+# the same Dockerfile on the same day and carries the same package versions.
 #
 # Runs weekly (not on PRs) so freshly-disclosed CVEs surface without adding an
-# image build to every PR. Results land in the Security → Code scanning tab.
+# image pull to every PR. Results land in the Security → Code scanning tab.
 #
-# Tuned to report only ACTIONABLE findings:
-#   - ignore-unfixed: drop CVEs with no fixed version (e.g. kernel headers) —
-#     they are noise we cannot resolve here.
-#   - severity HIGH,CRITICAL: skip the low/medium OS-package churn.
+# ignore-unfixed drops CVEs with no fixed version (e.g. kernel headers) —
+# noise we cannot resolve here. Every other finding, whatever its severity,
+# is actionable: the runtime stage upgrades the base's Debian packages, so
+# the next release ships the fix. There is deliberately no severity filter;
+# Debian security advisories often carry no severity of their own.
 # This is informational; it does not gate anything.
 
 on:
@@ -47,26 +52,13 @@ jobs:
           # in the workspace.
           persist-credentials: false
 
-      - name: Set up Buildx
-        uses: docker/setup-buildx-action@v4
-
-      - name: Build image (amd64, no push)
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64
-          push: false
-          load: true
-          tags: signalk-doctor-server:scan
-
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          image-ref: 'signalk-doctor-server:scan'
+          image-ref: 'ghcr.io/${{ github.repository }}:latest'
           format: 'sarif'
           output: 'trivy-results.sarif'
           ignore-unfixed: true
-          severity: 'HIGH,CRITICAL'
 
       - name: Upload Trivy scan results to GitHub Security tab
         # always() so a scan that finds CVEs (non-zero) still uploads, but
