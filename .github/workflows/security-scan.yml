@@ -11,17 +11,21 @@ name: Security Scan
 # no code changed — coverage neither `npm audit` nor Dependabot provides.
 # Scanning the release rather than a fresh build makes an open alert mean
 # the released image is affected, and it stays open until a release ships
-# the fix. The amd64 variant is scanned; the arm64 one is built from
-# the same Dockerfile on the same day and carries the same package versions.
+# the fix. Every published architecture is scanned: the Node image builds
+# each one separately, so their packages can differ.
 #
 # Runs weekly (not on PRs) so freshly-disclosed CVEs surface without adding an
 # image pull to every PR. Results land in the Security → Code scanning tab.
 #
 # ignore-unfixed drops CVEs with no fixed version (e.g. kernel headers) —
-# noise we cannot resolve here. Every other finding, whatever its severity,
-# is actionable: the runtime stage upgrades the base's Debian packages, so
-# the next release ships the fix. There is deliberately no severity filter;
-# Debian security advisories often carry no severity of their own.
+# noise we cannot resolve here. Every other finding is actionable, whatever
+# its severity, and there is deliberately no severity filter: Debian security
+# advisories often carry none. What fixes one depends on where it sits:
+#   - a Debian package: the next release (the runtime stage upgrades them)
+#   - an npm package: the next release, when the fix is inside the range in
+#     package.json (no lockfile is committed, so the build resolves fresh);
+#     otherwise a dependency bump
+#   - the Node runtime: a release after the node:24 base is rebuilt upstream
 # This is informational; it does not gate anything.
 
 on:
@@ -29,8 +33,8 @@ on:
     - cron: '0 0 * * 1'
   workflow_dispatch:
 
-# A manual dispatch can overlap the weekly run; both upload the same
-# trivy-docker SARIF category, so cancel an older in-progress scan.
+# A manual dispatch can overlap the weekly run; both upload the same SARIF
+# categories, so cancel an older in-progress scan.
 concurrency:
   group: security-scan-${{ github.ref }}
   cancel-in-progress: true
@@ -42,8 +46,18 @@ permissions:
 jobs:
   security-scan:
     if: github.repository == 'dirkwa/signalk-doctor-server'
-    name: Security Scan
+    name: Security Scan (${{ matrix.arch }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # amd64 keeps the category the scan has always uploaded, so its
+          # existing alerts update in place.
+          - arch: amd64
+            category: trivy-docker
+          - arch: arm64
+            category: trivy-docker-arm64
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -54,6 +68,10 @@ jobs:
 
       - name: Run Trivy vulnerability scanner
         uses: aquasecurity/trivy-action@v0.36.0
+        env:
+          # The action has no platform input; Trivy reads every flag from a
+          # TRIVY_* variable, --platform included.
+          TRIVY_PLATFORM: linux/${{ matrix.arch }}
         with:
           image-ref: 'ghcr.io/${{ github.repository }}:latest'
           format: 'sarif'
@@ -68,4 +86,4 @@ jobs:
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: 'trivy-results.sarif'
-          category: 'trivy-docker'
+          category: ${{ matrix.category }}
