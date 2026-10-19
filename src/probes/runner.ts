@@ -13,6 +13,8 @@ import { probeTimezoneDrift } from './timezone-drift.js';
 import { probeDependencyDrift } from './dependency-drift.js';
 import { probeCgroupDelegation } from './cgroup-delegation.js';
 import { probeStorageType } from './storage-type.js';
+import { probeWatchdog } from './watchdog.js';
+import { probeHostRestarts } from './host-restarts.js';
 import { probeTimeoutMs } from './budget.js';
 
 interface ProbeSpec {
@@ -48,6 +50,8 @@ const PROBES: ProbeSpec[] = [
   { id: 'time-drift', label: 'System clock vs ghcr.io', run: probeTimeDrift },
   { id: 'cgroup-delegation', label: 'cgroup controller delegation', run: probeCgroupDelegation },
   { id: 'storage-type', label: 'Host root storage', run: probeStorageType },
+  { id: 'hardware-watchdog', label: 'Hardware watchdog', run: probeWatchdog },
+  { id: 'host-restarts', label: 'Unclean host restarts', run: () => probeHostRestarts() },
 ];
 
 // The per-probe ceiling now lives in ./budget.ts: the probes that make

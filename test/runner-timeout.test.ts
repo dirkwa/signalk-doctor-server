@@ -34,6 +34,8 @@ function mockAll(overrides: Record<string, () => Promise<ProbeResult>> = {}): vo
     probeTimeDrift: () => Promise.resolve(ok('time-drift')),
     probeCgroupDelegation: () => Promise.resolve(ok('cgroup-delegation')),
     probeStorageType: () => Promise.resolve(ok('storage-type')),
+    probeWatchdog: () => Promise.resolve(ok('hardware-watchdog')),
+    probeHostRestarts: () => Promise.resolve(ok('host-restarts')),
   };
   const p = { ...defs, ...overrides };
   vi.doMock('../src/probes/podman.js', () => ({ probePodman: p.probePodman }));
@@ -63,6 +65,10 @@ function mockAll(overrides: Record<string, () => Promise<ProbeResult>> = {}): vo
     probeCgroupDelegation: p.probeCgroupDelegation,
   }));
   vi.doMock('../src/probes/storage-type.js', () => ({ probeStorageType: p.probeStorageType }));
+  vi.doMock('../src/probes/watchdog.js', () => ({ probeWatchdog: p.probeWatchdog }));
+  vi.doMock('../src/probes/host-restarts.js', () => ({
+    probeHostRestarts: p.probeHostRestarts,
+  }));
 }
 
 describe('runAllProbes — per-probe timeout', () => {
@@ -94,7 +100,7 @@ describe('runAllProbes — per-probe timeout', () => {
     // No result is keyed by the function name.
     expect(out.results.some((r) => r.id === 'probePodman')).toBe(false);
     expect(out.summary.unknown).toBe(1);
-    expect(out.summary.ok).toBe(14);
+    expect(out.summary.ok).toBe(16);
   });
 
   it('marks a throwing probe unknown under its registry id (does not reject the run)', async () => {
@@ -107,15 +113,15 @@ describe('runAllProbes — per-probe timeout', () => {
     expect(dbus?.label).toBe('User-instance DBus socket');
     expect(dbus?.message).toBe('boom');
     expect(out.summary.unknown).toBe(1);
-    expect(out.summary.ok).toBe(14);
+    expect(out.summary.ok).toBe(16);
   });
 
-  it('passes fast probes through unchanged (no timeout penalty, all 15 ok)', async () => {
+  it('passes fast probes through unchanged (no timeout penalty, all 17 ok)', async () => {
     mockAll();
     const { runAllProbes } = await import('../src/probes/runner.js');
     const out = await runAllProbes();
-    expect(out.summary.ok).toBe(15);
+    expect(out.summary.ok).toBe(17);
     expect(out.summary.unknown).toBe(0);
-    expect(out.results).toHaveLength(15);
+    expect(out.results).toHaveLength(17);
   });
 });
