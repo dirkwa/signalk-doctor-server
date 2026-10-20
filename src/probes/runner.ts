@@ -15,6 +15,7 @@ import { probeCgroupDelegation } from './cgroup-delegation.js';
 import { probeStorageType } from './storage-type.js';
 import { probeWatchdog } from './watchdog.js';
 import { probeHostRestarts } from './host-restarts.js';
+import { probePiPower } from './pi-power.js';
 import { probeTimeoutMs } from './budget.js';
 
 interface ProbeSpec {
@@ -52,6 +53,7 @@ const PROBES: ProbeSpec[] = [
   { id: 'storage-type', label: 'Host root storage', run: probeStorageType },
   { id: 'hardware-watchdog', label: 'Hardware watchdog', run: probeWatchdog },
   { id: 'host-restarts', label: 'Unclean host restarts', run: () => probeHostRestarts() },
+  { id: 'pi-power', label: 'Pi power and temperature', run: probePiPower },
 ];
 
 // The per-probe ceiling now lives in ./budget.ts: the probes that make

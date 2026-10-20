@@ -4,6 +4,7 @@ import { pruneOldImagesFor } from './image-retention.js';
 import { withMutex } from './mutex.js';
 import { SELF_IMAGE } from './routes/self.js';
 import { installCleanStopHandlers, recordBoot } from './host-boots.js';
+import { startUnderVoltageSampler } from './pi-power.js';
 
 // Happy-Eyeballs (RFC 8305) attempt timeout for ALL outbound connections,
 // including global fetch() — which is how the version-drift / updater-health /
@@ -45,6 +46,9 @@ async function main(): Promise<void> {
   } catch (err) {
     app.log.warn({ err }, 'host boot record not written');
   }
+  // On a Pi, stores the first under-voltage of this boot in that record; the
+  // hwmon driver clears the firmware's flag every 2 s, so nothing else keeps it.
+  await startUnderVoltageSampler(app.log);
 
   try {
     await app.listen({ port: PORT, host: HOST });

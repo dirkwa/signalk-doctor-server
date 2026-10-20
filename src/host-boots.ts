@@ -18,6 +18,8 @@ export interface UncleanRestart {
   /** When the host came back up, from /proc/stat btime. */
   hostBootedAt: string | null;
   detectedAt: string;
+  /** When the doctor first saw the Pi's under-voltage alarm during that boot. */
+  underVoltageAt: string | null;
 }
 
 export interface HostBootState {
@@ -27,6 +29,9 @@ export interface HostBootState {
   cleanStop: boolean;
   trackingSince: string;
   unclean: UncleanRestart[];
+  /** When the doctor first saw the Pi's under-voltage alarm during this boot
+   *  (sampled by src/pi-power.ts). */
+  underVoltageAt: string | null;
 }
 
 const MAX_UNCLEAN = 20;
@@ -76,14 +81,20 @@ export async function isWsl(): Promise<boolean> {
   }
 }
 
-function isUncleanRestart(value: unknown): value is UncleanRestart {
+// Records written before underVoltageAt existed lack the field; it reads as null.
+function isOptionalTime(value: unknown): boolean {
+  return value === undefined || value === null || typeof value === 'string';
+}
+
+function isUncleanRestart(value: unknown): boolean {
   if (!value || typeof value !== 'object') return false;
   const v = value as Record<string, unknown>;
   return (
     typeof v.bootId === 'string' &&
     typeof v.doctorStartedAt === 'string' &&
     (typeof v.hostBootedAt === 'string' || v.hostBootedAt === null) &&
-    typeof v.detectedAt === 'string'
+    typeof v.detectedAt === 'string' &&
+    isOptionalTime(v.underVoltageAt)
   );
 }
 
@@ -104,11 +115,17 @@ export async function loadHostBoots(): Promise<HostBootState | null> {
     typeof s.cleanStop !== 'boolean' ||
     typeof s.trackingSince !== 'string' ||
     !Array.isArray(s.unclean) ||
-    !s.unclean.every(isUncleanRestart)
+    !s.unclean.every(isUncleanRestart) ||
+    !isOptionalTime(s.underVoltageAt)
   ) {
     return null;
   }
-  return parsed as HostBootState;
+  const state = parsed as HostBootState;
+  return {
+    ...state,
+    underVoltageAt: state.underVoltageAt ?? null,
+    unclean: state.unclean.map((e) => ({ ...e, underVoltageAt: e.underVoltageAt ?? null })),
+  };
 }
 
 // Synchronous so the SIGTERM handler can finish the write before it re-raises
@@ -147,6 +164,7 @@ export async function recordBoot(now = new Date()): Promise<HostBootState | null
       doctorStartedAt: prev.startedAt,
       hostBootedAt: await readHostBootedAt(),
       detectedAt: now.toISOString(),
+      underVoltageAt: prev.underVoltageAt,
     });
   }
   const next: HostBootState = {
@@ -156,10 +174,22 @@ export async function recordBoot(now = new Date()): Promise<HostBootState | null
     cleanStop: false,
     trackingSince: prev?.trackingSince ?? now.toISOString(),
     unclean: unclean.slice(-MAX_UNCLEAN),
+    // A doctor restart within the same boot keeps what it already saw.
+    underVoltageAt: prev?.bootId === bootId ? prev.underVoltageAt : null,
   };
   writeAtomicSync(hostBootsPath(), JSON.stringify(next, null, 2) + '\n');
   current = next;
   return next;
+}
+
+/** Stores the first under-voltage observation of this boot. Returns false
+ *  when there is no record for this boot or it already holds one. */
+export function noteUnderVoltage(now = new Date()): boolean {
+  if (!current || current.underVoltageAt !== null) return false;
+  const next = { ...current, underVoltageAt: now.toISOString() };
+  writeAtomicSync(hostBootsPath(), JSON.stringify(next, null, 2) + '\n');
+  current = next;
+  return true;
 }
 
 /** Marks this boot's record as cleanly stopped. Never throws: it runs inside a

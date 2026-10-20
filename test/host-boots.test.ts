@@ -8,6 +8,7 @@ import {
   installCleanStopHandlers,
   loadHostBoots,
   markCleanStopSync,
+  noteUnderVoltage,
   recordBoot,
   resetHostBootsForTest,
 } from '../src/host-boots.js';
@@ -90,8 +91,55 @@ describe('host boot tracking', () => {
         doctorStartedAt: '2026-10-20T08:00:00.000Z',
         hostBootedAt: new Date(BTIME * 1000).toISOString(),
         detectedAt: '2026-10-20T10:00:00.000Z',
+        underVoltageAt: null,
       },
     ]);
+  });
+
+  it('stores the first under-voltage of a boot once and carries it into the unclean entry', async () => {
+    await boot(BOOT_A);
+    await recordBoot(at('2026-10-20T08:00:00Z'));
+    expect(noteUnderVoltage(at('2026-10-20T08:30:00Z'))).toBe(true);
+    expect(noteUnderVoltage(at('2026-10-20T08:31:00Z'))).toBe(false);
+    expect((await loadHostBoots())?.underVoltageAt).toBe('2026-10-20T08:30:00.000Z');
+    resetHostBootsForTest();
+    await boot(BOOT_B);
+    const s = await recordBoot(at('2026-10-20T10:00:00Z'));
+    expect(s?.underVoltageAt).toBeNull();
+    expect(s?.unclean.at(-1)?.underVoltageAt).toBe('2026-10-20T08:30:00.000Z');
+  });
+
+  it('keeps the under-voltage time across a doctor restart within the same boot', async () => {
+    await boot(BOOT_A);
+    await recordBoot(at('2026-10-20T08:00:00Z'));
+    noteUnderVoltage(at('2026-10-20T08:30:00Z'));
+    resetHostBootsForTest();
+    const s = await recordBoot(at('2026-10-20T09:00:00Z'));
+    expect(s?.underVoltageAt).toBe('2026-10-20T08:30:00.000Z');
+  });
+
+  it('reads a record written before underVoltageAt existed', async () => {
+    await writeFile(
+      hostBootsPath(),
+      JSON.stringify({
+        version: 1,
+        bootId: BOOT_A,
+        startedAt: '2026-10-19T08:00:00.000Z',
+        cleanStop: false,
+        trackingSince: '2026-10-19T08:00:00.000Z',
+        unclean: [
+          {
+            bootId: BOOT_B,
+            doctorStartedAt: '2026-10-18T08:00:00.000Z',
+            hostBootedAt: null,
+            detectedAt: '2026-10-19T08:00:00.000Z',
+          },
+        ],
+      }),
+    );
+    const s = await loadHostBoots();
+    expect(s?.underVoltageAt).toBeNull();
+    expect(s?.unclean[0]?.underVoltageAt).toBeNull();
   });
 
   it('keeps the newest 20 unclean restarts', async () => {
@@ -167,6 +215,20 @@ describe('host boot tracking', () => {
       expect(r.status).toBe('warn');
       expect(r.message).toMatch(/without a clean shutdown once in the last 7 days/);
       expect(r.message).toContain(`back up at ${new Date(BTIME * 1000).toISOString()}`);
+    });
+
+    it('names the under-voltage the Pi reported during the boot that ended uncleanly', async () => {
+      await boot(BOOT_A);
+      await recordBoot(at('2026-10-20T08:00:00Z'));
+      noteUnderVoltage(at('2026-10-20T08:30:00Z'));
+      resetHostBootsForTest();
+      await boot(BOOT_B);
+      await recordBoot(at('2026-10-20T10:00:00Z'));
+      const r = await probeHostRestarts(at('2026-10-21T08:00:00Z'));
+      expect(r.status).toBe('warn');
+      expect(r.message).toContain(
+        'The Pi reported under-voltage during that boot, first at 2026-10-20T08:30:00.000Z.',
+      );
     });
 
     it("goes back to 'ok' once the restart is older than 7 days, and counts it as earlier", async () => {

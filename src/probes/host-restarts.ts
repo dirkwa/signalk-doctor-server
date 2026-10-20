@@ -47,10 +47,18 @@ export async function probeHostRestarts(now = new Date()): Promise<ProbeResult> 
   const last = recent.at(-1);
   if (last) {
     const times = recent.length === 1 ? 'once' : `${recent.length} times`;
+    const withUnderVoltage = recent.filter((e) => e.underVoltageAt !== null).length;
+    const underVoltage =
+      withUnderVoltage === 0
+        ? ''
+        : recent.length === 1
+          ? `The Pi reported under-voltage during that boot, first at ${last.underVoltageAt}. `
+          : `The Pi reported under-voltage during ${withUnderVoltage} of those boots. `;
     return result(
       'warn',
       `The host restarted without a clean shutdown ${times} in the last ${WINDOW_DAYS} days, ` +
         `most recently back up at ${last.hostBootedAt ?? last.detectedAt}. ` +
+        underVoltage +
         'A hardware-watchdog reset, a power cut or a kernel panic ends a boot this way; ' +
         "'signalk bug-report' collects the power-supply state and the end of the previous boot's journal",
       details,
