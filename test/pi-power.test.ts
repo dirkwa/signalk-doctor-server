@@ -210,6 +210,23 @@ describe('Pi power and temperature', () => {
       expect(r.message).toMatch(/^Under-voltage right now: .*; CPU at 82.0 °C/);
     });
 
+    it("is 'unknown', not 'Not a Raspberry Pi', when the devicetree model cannot be read", async () => {
+      await mkdir(sys('firmware/devicetree/base/model'), { recursive: true });
+      const r = await probePiPower();
+      expect(r.status).toBe('unknown');
+      expect(r.message).toMatch(/no rpi_volt hwmon device/);
+    });
+
+    it('names the unreadable alarm file when rpi_volt exists', async () => {
+      await fakePi({});
+      await rm(sys('class/hwmon/hwmon1/in0_lcrit_alarm'));
+      const r = await probePiPower();
+      expect(r.status).toBe('unknown');
+      expect(r.message).toBe(
+        `Cannot read ${sys('class/hwmon/hwmon1')}/in0_lcrit_alarm; CPU at 52.3 °C`,
+      );
+    });
+
     it("is 'unknown' on a Pi without the rpi_volt device", async () => {
       await fakePi({ volt: false });
       const r = await probePiPower();

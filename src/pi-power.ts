@@ -16,13 +16,15 @@ import { noteUnderVoltage } from './host-boots.js';
 // Read per call so tests can point it at a fixture tree.
 const sysRoot = (): string => process.env.HOST_SYS ?? '/host/sys';
 
-/** The devicetree model names the board, e.g. "Raspberry Pi 5 Model B Rev 1.0". */
-export async function isRaspberryPi(): Promise<boolean> {
+/** The devicetree model names the board, e.g. "Raspberry Pi 5 Model B Rev 1.0".
+ *  A host without a devicetree (an x86 PC) has no model file, which answers
+ *  false; any other read failure answers null. */
+export async function isRaspberryPi(): Promise<boolean | null> {
   try {
     const model = await readFile(join(sysRoot(), 'firmware/devicetree/base/model'), 'utf8');
     return /raspberry pi/i.test(model);
-  } catch {
-    return false;
+  } catch (err) {
+    return (err as { code?: unknown }).code === 'ENOENT' ? false : null;
   }
 }
 

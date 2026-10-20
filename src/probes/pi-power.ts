@@ -47,7 +47,7 @@ export async function probePiPower(): Promise<ProbeResult> {
   }
 
   const voltDir = await findRpiVolt();
-  if (!voltDir && !(await isRaspberryPi())) {
+  if (!voltDir && (await isRaspberryPi()) === false) {
     return result('ok', 'Not a Raspberry Pi');
   }
 
@@ -91,7 +91,9 @@ export async function probePiPower(): Promise<ProbeResult> {
   if (alarm === null) {
     return result(
       'unknown',
-      `Cannot read the under-voltage alarm (no rpi_volt hwmon device)${cpu}`,
+      voltDir
+        ? `Cannot read ${voltDir}/in0_lcrit_alarm${cpu}`
+        : `Cannot read the under-voltage alarm (no rpi_volt hwmon device)${cpu}`,
       details,
     );
   }
