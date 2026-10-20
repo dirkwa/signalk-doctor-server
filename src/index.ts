@@ -3,6 +3,7 @@ import { createServer } from './server.js';
 import { pruneOldImagesFor } from './image-retention.js';
 import { withMutex } from './mutex.js';
 import { SELF_IMAGE } from './routes/self.js';
+import { installCleanStopHandlers, recordBoot } from './host-boots.js';
 
 // Happy-Eyeballs (RFC 8305) attempt timeout for ALL outbound connections,
 // including global fetch() — which is how the version-drift / updater-health /
@@ -34,6 +35,17 @@ const HOST = process.env.HOST ?? '0.0.0.0';
 
 async function main(): Promise<void> {
   const { app, driftScheduler } = await createServer();
+
+  // Boot record for the host-restarts probe: written now, marked cleanly
+  // stopped when podman sends SIGTERM. A failed write only leaves that probe
+  // without data.
+  installCleanStopHandlers();
+  try {
+    await recordBoot();
+  } catch (err) {
+    app.log.warn({ err }, 'host boot record not written');
+  }
+
   try {
     await app.listen({ port: PORT, host: HOST });
     driftScheduler.start();

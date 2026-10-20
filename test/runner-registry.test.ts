@@ -25,6 +25,8 @@ const EXPECTED_IDS = new Set([
   'time-drift',
   'cgroup-delegation',
   'storage-type',
+  'hardware-watchdog',
+  'host-restarts',
 ]);
 
 describe('runAllProbes — registry id integrity', () => {
