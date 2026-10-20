@@ -36,6 +36,7 @@ function mockAll(overrides: Record<string, () => Promise<ProbeResult>> = {}): vo
     probeStorageType: () => Promise.resolve(ok('storage-type')),
     probeWatchdog: () => Promise.resolve(ok('hardware-watchdog')),
     probeHostRestarts: () => Promise.resolve(ok('host-restarts')),
+    probePiPower: () => Promise.resolve(ok('pi-power')),
   };
   const p = { ...defs, ...overrides };
   vi.doMock('../src/probes/podman.js', () => ({ probePodman: p.probePodman }));
@@ -69,6 +70,7 @@ function mockAll(overrides: Record<string, () => Promise<ProbeResult>> = {}): vo
   vi.doMock('../src/probes/host-restarts.js', () => ({
     probeHostRestarts: p.probeHostRestarts,
   }));
+  vi.doMock('../src/probes/pi-power.js', () => ({ probePiPower: p.probePiPower }));
 }
 
 describe('runAllProbes — per-probe timeout', () => {
@@ -100,7 +102,7 @@ describe('runAllProbes — per-probe timeout', () => {
     // No result is keyed by the function name.
     expect(out.results.some((r) => r.id === 'probePodman')).toBe(false);
     expect(out.summary.unknown).toBe(1);
-    expect(out.summary.ok).toBe(16);
+    expect(out.summary.ok).toBe(17);
   });
 
   it('marks a throwing probe unknown under its registry id (does not reject the run)', async () => {
@@ -113,15 +115,15 @@ describe('runAllProbes — per-probe timeout', () => {
     expect(dbus?.label).toBe('User-instance DBus socket');
     expect(dbus?.message).toBe('boom');
     expect(out.summary.unknown).toBe(1);
-    expect(out.summary.ok).toBe(16);
+    expect(out.summary.ok).toBe(17);
   });
 
-  it('passes fast probes through unchanged (no timeout penalty, all 17 ok)', async () => {
+  it('passes fast probes through unchanged (no timeout penalty, all 18 ok)', async () => {
     mockAll();
     const { runAllProbes } = await import('../src/probes/runner.js');
     const out = await runAllProbes();
-    expect(out.summary.ok).toBe(17);
+    expect(out.summary.ok).toBe(18);
     expect(out.summary.unknown).toBe(0);
-    expect(out.results).toHaveLength(17);
+    expect(out.results).toHaveLength(18);
   });
 });

@@ -27,6 +27,7 @@ const EXPECTED_IDS = new Set([
   'storage-type',
   'hardware-watchdog',
   'host-restarts',
+  'pi-power',
 ]);
 
 describe('runAllProbes — registry id integrity', () => {
