@@ -18,10 +18,9 @@ interface GeneratedReport {
 }
 
 // Where bug reports go. Same target as the bash `signalk bug-report`
-// helper — most reports surface signalk-server problems even when
-// triggered via the Doctor. Future: dropdown to pick a different
-// dirkwa/signalk-* repo when the bug is clearly in a peer.
-const ISSUE_REPO = 'SignalK/signalk-server';
+// helper: the bundle describes the installation, so the Universal
+// Installer triages it first and forwards server bugs upstream.
+const ISSUE_REPO = 'dirkwa/signalk-universal-installer';
 
 export function BugReport() {
   const [report, setReport] = useState<GeneratedReport | null>(null);
