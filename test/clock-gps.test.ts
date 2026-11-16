@@ -132,6 +132,14 @@ describe('probeClockGps', () => {
     expect(r.message).toContain('stayed at');
   });
 
+  it('turns to a warning past the 30 s threshold', async () => {
+    const under = await run(sources({ gps: { ok: true, value: iso(29.5), observedAt: NOW } }));
+    expect(under.status).toBe('ok');
+    const over = await run(sources({ gps: { ok: true, value: iso(30.5), observedAt: NOW } }));
+    expect(over.status).toBe('warn');
+    expect(over.message).toContain('clock is 31 s behind GPS');
+  });
+
   it('reports a large offset in either direction', async () => {
     const behind = await run(sources({ gps: { ok: true, value: iso(-7200), observedAt: NOW } }));
     expect(behind.message).toContain('clock is 2 h ahead of GPS');
@@ -274,6 +282,34 @@ describe('reading Signal K', () => {
     const gps = await readGpsTime('tok', startProbeDeadline());
     expect(gps).toMatchObject({ ok: true, value: iso(3) });
     if (gps.ok) expect(gps.observedAt).toBeGreaterThan(before + 1200);
+  });
+
+  it('times a change at the middle of the span and judges the offset from it', async () => {
+    // GPS runs 29 s ahead of the host and the second answer takes 400 ms.
+    // Timing the change at the middle of the span errs by at most half of it.
+    const before = Date.now();
+    fetchSpy
+      .mockResolvedValueOnce(res(200, { value: new Date(before + 29_000).toISOString() }))
+      .mockImplementationOnce(
+        () =>
+          new Promise((r) =>
+            setTimeout(
+              () => r(res(200, { value: new Date(Date.now() + 29_000).toISOString() })),
+              400,
+            ),
+          ),
+      );
+    const gps = await readGpsTime('tok', startProbeDeadline());
+    const after = Date.now();
+    expect(gps.ok).toBe(true);
+    if (!gps.ok) return;
+    expect(gps.observedAt).toBeGreaterThanOrEqual(before);
+    expect(gps.observedAt).toBeLessThanOrEqual(after - 300);
+    const offset = (Date.parse(gps.value) - gps.observedAt) / 1000;
+    expect(offset).toBeGreaterThan(29);
+    expect(offset).toBeLessThan(29.6);
+    const verdict = await run(sources({ gps }));
+    expect(verdict.status).toBe('ok');
   });
 
   it('gives up when every change arrives through a slow answer', async () => {
