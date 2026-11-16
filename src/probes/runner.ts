@@ -7,6 +7,7 @@ import { probeDbus } from './dbus.js';
 import { probeDisk } from './disk.js';
 import { probeMemory } from './memory.js';
 import { probeTimeDrift } from './time-drift.js';
+import { probeClockGps } from './clock-gps.js';
 import { probeSnapshots } from './snapshots.js';
 import { probeVersionDrift } from './version-drift.js';
 import { probeTimezoneDrift } from './timezone-drift.js';
@@ -49,6 +50,7 @@ const PROBES: ProbeSpec[] = [
   { id: 'disk', label: 'Disk free on /data', run: probeDisk },
   { id: 'memory', label: 'Free RAM', run: probeMemory },
   { id: 'time-drift', label: 'System clock vs ghcr.io', run: probeTimeDrift },
+  { id: 'clock-gps', label: 'System clock vs GPS', run: () => probeClockGps() },
   { id: 'cgroup-delegation', label: 'cgroup controller delegation', run: probeCgroupDelegation },
   { id: 'storage-type', label: 'Host root storage', run: probeStorageType },
   { id: 'hardware-watchdog', label: 'Hardware watchdog', run: probeWatchdog },

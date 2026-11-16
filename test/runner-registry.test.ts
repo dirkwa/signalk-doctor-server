@@ -23,6 +23,7 @@ const EXPECTED_IDS = new Set([
   'disk',
   'memory',
   'time-drift',
+  'clock-gps',
   'cgroup-delegation',
   'storage-type',
   'hardware-watchdog',

@@ -4,7 +4,7 @@ Peer engine container for the SignalK container stack. Owns **read-only diagnost
 
 This is **not a SignalK plugin** — it runs in its own container alongside `signalk-server` and is intentionally independent of `signalk-updater-server`. When the updater itself is broken (bad self-update, crashloop, DBus dead), the doctor is the path back.
 
-It runs a set of read-only health probes (`GET /api/probes`) — container/runtime state, SignalK and updater health, disk/memory, version and dependency drift, host↔container **timezone drift**, and more — plus last-known-good recovery, targeted plugin-dependency heal, and a bundled bug-report collector. The browser console (Health / Logs / Snapshots / Drift / Recovery / Bug report / Installer tabs) is served from `:3004` and also embeds in the SignalK admin via the [signalk-doctor](https://github.com/dirkwa/signalk-doctor) plugin.
+It runs a set of read-only health probes (`GET /api/probes`) — container/runtime state, SignalK and updater health, disk/memory, version and dependency drift, host↔container **timezone drift**, the system clock against GPS time, and more — plus last-known-good recovery, targeted plugin-dependency heal, and a bundled bug-report collector. The browser console (Health / Logs / Snapshots / Drift / Recovery / Bug report / Installer tabs) is served from `:3004` and also embeds in the SignalK admin via the [signalk-doctor](https://github.com/dirkwa/signalk-doctor) plugin.
 
 ## Companion repos
 
