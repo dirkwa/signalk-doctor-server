@@ -22,20 +22,26 @@ const PLUGIN_ID = 'set-system-time';
 const TIMER = 'signalk-timesync.timer';
 /** The agent steps the clock once it is 10 s off and runs every 5 min. */
 export const MAX_OFFSET_S = 30;
-/** GPS data older than this, by signalk-server's own timestamp, is not used. */
-export const MAX_AGE_S = 60;
+/** GPS time that does not move within this long is not live, so not used. */
+export const LIVE_WAIT_MS = 2500;
+const POLL_MS = 250;
 const HOP_TIMEOUT_MS = 3000;
+const DATETIME_PATH = '/signalk/v1/api/vessels/self/navigation/datetime';
 
 export type GpsTime =
-  | { ok: true; value: string; timestamp: string }
-  | { ok: false; reason: 'no-token' | 'no-data' | 'unreachable'; detail: string };
+  /** `observedAt` is the host time at which `value` was read. */
+  | { ok: true; value: string; observedAt: number }
+  | {
+      ok: false;
+      reason: 'no-token' | 'no-data' | 'stale' | 'unreachable';
+      detail: string;
+    };
 
 export type HostTimeState =
   | { ok: true; timerLoaded: boolean; timerActive: boolean; ntpSynchronized: boolean }
   | { ok: false; detail: string };
 
 export interface ClockGpsSources {
-  now: number;
   gps: GpsTime;
   /** Whether set-system-time is enabled; null when it could not be read. */
   pluginEnabled: boolean | null;
@@ -61,66 +67,118 @@ async function readToken(): Promise<string | null> {
   }
 }
 
-/** GET a signalk-server path (relative to the server root) with the admin
- *  token, following the HTTP→HTTPS redirect signalk-server answers with when
- *  SSL is enabled. Resolves with the response, null for a 404, or throws an
- *  operator-readable error. */
-async function getSignalk(
-  path: string,
-  token: string,
-  deadline: ProbeDeadline,
-): Promise<Response | null> {
-  const root = (u: string): string => u.replace(/\/signalk\/?$/, '');
-  const headers = { authorization: `Bearer ${token}` };
-  const httpUrl = root(signalkHttpUrl()) + path;
-  let res = await hopWithHeaders(httpUrl, headers, false, deadline);
-  if (isRedirect(res)) {
-    const https = signalkHttpsUrl();
-    if (!https) throw new Error(`${httpUrl} redirects to HTTPS but no SIGNALK_HTTPS_URL is set`);
-    if (!deadline.allows(MIN_HOP_MS)) throw new Error('no probe budget left for the HTTPS hop');
-    res = await hopWithHeaders(root(https) + path, headers, true, deadline);
-  }
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`HTTP ${res.status} from ${path}`);
-  return res;
+interface Answer {
+  res: Response;
+  body: unknown;
 }
 
-function hopWithHeaders(
+/** One request whose timeout also covers reading the JSON body, which
+ *  arrives after `hop` has resolved with the headers. */
+async function hopJson(
   url: string,
   headers: Record<string, string>,
   tlsRelaxed: boolean,
   deadline: ProbeDeadline,
-): Promise<Response> {
-  return hop(
-    url,
-    { manualRedirect: !tlsRelaxed, tlsRelaxed, headers },
-    deadline.hop(HOP_TIMEOUT_MS),
-  );
+): Promise<Answer> {
+  const ms = deadline.hop(HOP_TIMEOUT_MS);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    const res = await hop(
+      url,
+      { manualRedirect: !tlsRelaxed, tlsRelaxed, headers, signal: controller.signal },
+      ms,
+    );
+    if (!res.ok) {
+      await res.body?.cancel();
+      return { res, body: undefined };
+    }
+    try {
+      return { res, body: await res.json() };
+    } catch (err) {
+      if (controller.signal.aborted) {
+        throw new Error(`${url} did not send its whole answer within ${ms} ms`, { cause: err });
+      }
+      throw new Error(`${url} answered with invalid JSON`, { cause: err });
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** GET a signalk-server path (relative to the server root) with the admin
+ *  token: over HTTP, following the redirect signalk-server answers with when
+ *  SSL is enabled, or straight over HTTPS when HTTP cannot be reached.
+ *  Resolves with the JSON body, null for a 404, or throws an operator-readable
+ *  error. */
+async function getSignalk(path: string, token: string, deadline: ProbeDeadline): Promise<unknown> {
+  const root = (u: string): string => u.replace(/\/signalk\/?$/, '');
+  const headers = { authorization: `Bearer ${token}` };
+  const httpUrl = root(signalkHttpUrl()) + path;
+  const https = signalkHttpsUrl();
+  const httpsUrl = https ? root(https) + path : null;
+  let answer: Answer;
+  try {
+    answer = await hopJson(httpUrl, headers, false, deadline);
+  } catch (err) {
+    if (!httpsUrl || !deadline.allows(MIN_HOP_MS)) throw err;
+    answer = await hopJson(httpsUrl, headers, true, deadline);
+  }
+  if (isRedirect(answer.res)) {
+    if (!httpsUrl) throw new Error(`${httpUrl} redirects to HTTPS but no SIGNALK_HTTPS_URL is set`);
+    if (!deadline.allows(MIN_HOP_MS)) throw new Error('no probe budget left for the HTTPS hop');
+    answer = await hopJson(httpsUrl, headers, true, deadline);
+  }
+  const { res, body } = answer;
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${path}`);
+  return body;
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
 }
 
+async function readDatetime(
+  token: string,
+  deadline: ProbeDeadline,
+): Promise<{ value: string; observedAt: number } | null> {
+  const body = await getSignalk(DATETIME_PATH, token, deadline);
+  const observedAt = Date.now();
+  const value = isRecord(body) ? body.value : undefined;
+  return typeof value === 'string' ? { value, observedAt } : null;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** Reads navigation.datetime until it changes. Its `timestamp` cannot tell
+ *  how old the value is: for RMC it is the GPS time itself, for NMEA 2000 the
+ *  host's receive time. A value that moves is live, and was read within one
+ *  poll of the moment it was current. */
 export async function readGpsTime(token: string | null, deadline: ProbeDeadline): Promise<GpsTime> {
   if (!token) {
     return { ok: false, reason: 'no-token', detail: `no Signal K token at ${tokenPath()}` };
   }
+  const noData: GpsTime = {
+    ok: false,
+    reason: 'no-data',
+    detail: 'Signal K has no navigation.datetime',
+  };
   try {
-    const res = await getSignalk(
-      '/signalk/v1/api/vessels/self/navigation/datetime',
-      token,
-      deadline,
-    );
-    if (!res)
-      return { ok: false, reason: 'no-data', detail: 'Signal K has no navigation.datetime' };
-    const body: unknown = await res.json();
-    const value = isRecord(body) ? body.value : undefined;
-    const timestamp = isRecord(body) ? body.timestamp : undefined;
-    if (typeof value !== 'string' || typeof timestamp !== 'string') {
-      return { ok: false, reason: 'no-data', detail: 'navigation.datetime has no value' };
+    const first = await readDatetime(token, deadline);
+    if (!first) return noData;
+    const started = performance.now();
+    while (performance.now() - started < LIVE_WAIT_MS && deadline.allows(POLL_MS + MIN_HOP_MS)) {
+      await sleep(POLL_MS);
+      const next = await readDatetime(token, deadline);
+      if (!next) return noData;
+      if (next.value !== first.value) return { ok: true, ...next };
     }
-    return { ok: true, value, timestamp };
+    return {
+      ok: false,
+      reason: 'stale',
+      detail: `navigation.datetime stayed at ${first.value}, so no GPS time is arriving`,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -136,9 +194,7 @@ export async function readPluginEnabled(
 ): Promise<boolean | null> {
   if (!token) return null;
   try {
-    const res = await getSignalk(`/plugins/${PLUGIN_ID}/config`, token, deadline);
-    if (!res) return false;
-    const body: unknown = await res.json();
+    const body = await getSignalk(`/plugins/${PLUGIN_ID}/config`, token, deadline);
     return isRecord(body) && body.enabled === true;
   } catch {
     return null;
@@ -155,7 +211,7 @@ export function parseHostState(stdout: string): HostTimeState {
   const load = kv.get('LoadState');
   const active = kv.get('ActiveState');
   const ntp = kv.get('NTPSynchronized');
-  if (load === undefined || active === undefined || ntp === undefined) {
+  if (load === undefined || active === undefined || (ntp !== 'yes' && ntp !== 'no')) {
     return { ok: false, detail: `unexpected host output (${JSON.stringify(stdout.trim())})` };
   }
   return {
@@ -169,7 +225,7 @@ export function parseHostState(stdout: string): HostTimeState {
 async function readHostState(): Promise<HostTimeState> {
   const r = await runHostShell(
     `systemctl show -p LoadState -p ActiveState ${TIMER}; ` +
-      'echo "NTPSynchronized=$(timedatectl show -p NTPSynchronized --value)"',
+      'ntp=$(timedatectl show -p NTPSynchronized --value) && echo "NTPSynchronized=$ntp"',
   );
   return r.ok ? parseHostState(r.stdout) : { ok: false, detail: `${r.reason}: ${r.detail}` };
 }
@@ -183,7 +239,7 @@ async function gatherSourcesReal(): Promise<ClockGpsSources> {
     readHostState(),
     isWsl(),
   ]);
-  return { now: Date.now(), gps, pluginEnabled, host, wsl };
+  return { gps, pluginEnabled, host, wsl };
 }
 
 function seconds(s: number): string {
@@ -242,22 +298,14 @@ export async function probeClockGps(deps: ClockGpsDeps = {}): Promise<ProbeResul
   }
 
   const gpsMs = Date.parse(src.gps.value);
-  const stampMs = Date.parse(src.gps.timestamp);
-  if (Number.isNaN(gpsMs) || Number.isNaN(stampMs)) {
+  if (Number.isNaN(gpsMs)) {
     return done(warnings.length > 0 ? 'warn' : 'unknown', [
       ...warnings,
       `unreadable GPS time ${JSON.stringify(src.gps.value)}`,
     ]);
   }
-  const ageS = (src.now - stampMs) / 1000;
-  if (ageS < 0 || ageS > MAX_AGE_S) {
-    return done(warnings.length > 0 ? 'warn' : 'unknown', [
-      ...warnings,
-      `GPS time is ${seconds(ageS)} old, not compared`,
-    ]);
-  }
 
-  const offsetS = (gpsMs - src.now) / 1000;
+  const offsetS = (gpsMs - src.gps.observedAt) / 1000;
   details.offsetSec = Math.round(offsetS);
   if (Math.abs(offsetS) <= MAX_OFFSET_S) {
     const inSync = `clock within ${seconds(offsetS)} of GPS`;

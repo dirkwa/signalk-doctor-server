@@ -56,7 +56,13 @@ function fail(message: string, t0: number): ProbeResult {
  *  operator-readable message rather than undici's `fetch failed`. */
 export async function hop(
   url: string,
-  opts: { manualRedirect?: boolean; tlsRelaxed?: boolean; headers?: Record<string, string> },
+  opts: {
+    manualRedirect?: boolean;
+    tlsRelaxed?: boolean;
+    headers?: Record<string, string>;
+    /** Aborts the request, including a body read after this resolves. */
+    signal?: AbortSignal;
+  },
   timeoutMs: number,
 ): Promise<Response> {
   const started = Date.now();
@@ -72,7 +78,7 @@ export async function hop(
   // method` — Node 24 bundles undici 7.x, so we pin `^7.26.0`.
   type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
   const init: FetchInit = {
-    signal: controller.signal,
+    signal: opts.signal ? AbortSignal.any([controller.signal, opts.signal]) : controller.signal,
     redirect: opts.manualRedirect ? 'manual' : 'follow',
   };
   if (opts.headers) init.headers = opts.headers;

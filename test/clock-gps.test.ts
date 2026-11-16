@@ -24,8 +24,7 @@ const healthyHost: HostTimeState = {
 
 function sources(over: Partial<ClockGpsSources> = {}): ClockGpsSources {
   return {
-    now: NOW,
-    gps: { ok: true, value: iso(2), timestamp: iso(-1) },
+    gps: { ok: true, value: iso(2), observedAt: NOW },
     pluginEnabled: false,
     host: healthyHost,
     wsl: false,
@@ -50,7 +49,7 @@ describe('probeClockGps', () => {
   });
 
   it('warns when the clock is off and the timer is on without NTP', async () => {
-    const r = await run(sources({ gps: { ok: true, value: iso(3600), timestamp: iso(0) } }));
+    const r = await run(sources({ gps: { ok: true, value: iso(3600), observedAt: NOW } }));
     expect(r.status).toBe('warn');
     expect(r.message).toContain('clock is 60 min behind GPS');
     expect(r.message).toContain('signalk-timesync is on and there is no NTP');
@@ -59,7 +58,7 @@ describe('probeClockGps', () => {
   it('names the switched-off timer as the cause of an offset', async () => {
     const r = await run(
       sources({
-        gps: { ok: true, value: iso(-600), timestamp: iso(0) },
+        gps: { ok: true, value: iso(-600), observedAt: NOW },
         host: { ...healthyHost, timerActive: false },
       }),
     );
@@ -87,7 +86,7 @@ describe('probeClockGps', () => {
   it('points at the GPS source when NTP disagrees with GPS', async () => {
     const r = await run(
       sources({
-        gps: { ok: true, value: iso(120), timestamp: iso(0) },
+        gps: { ok: true, value: iso(120), observedAt: NOW },
         host: { ...healthyHost, ntpSynchronized: true },
       }),
     );
@@ -123,17 +122,28 @@ describe('probeClockGps', () => {
     expect(r.message).toContain('no navigation.datetime');
   });
 
-  it('does not compare stale GPS time', async () => {
-    const r = await run(sources({ gps: { ok: true, value: iso(3600), timestamp: iso(-300) } }));
+  it('does not compare GPS time that is not arriving', async () => {
+    const r = await run(
+      sources({
+        gps: { ok: false, reason: 'stale', detail: 'navigation.datetime stayed at x' },
+      }),
+    );
     expect(r.status).toBe('unknown');
-    expect(r.message).toContain('5 min old');
+    expect(r.message).toContain('stayed at');
+  });
+
+  it('reports a large offset in either direction', async () => {
+    const behind = await run(sources({ gps: { ok: true, value: iso(-7200), observedAt: NOW } }));
+    expect(behind.message).toContain('clock is 2 h ahead of GPS');
+    const ahead = await run(sources({ gps: { ok: true, value: iso(86400), observedAt: NOW } }));
+    expect(ahead.message).toContain('clock is 24 h behind GPS');
   });
 
   it('points at the Windows clock under WSL and skips the timer checks', async () => {
     const r = await run(
       sources({
         wsl: true,
-        gps: { ok: true, value: iso(300), timestamp: iso(0) },
+        gps: { ok: true, value: iso(300), observedAt: NOW },
         host: { ...healthyHost, timerLoaded: false, timerActive: false },
       }),
     );
@@ -145,7 +155,7 @@ describe('probeClockGps', () => {
   it('reports an offset it cannot explain when the host state is unreadable', async () => {
     const r = await run(
       sources({
-        gps: { ok: true, value: iso(90), timestamp: iso(0) },
+        gps: { ok: true, value: iso(90), observedAt: NOW },
         host: { ok: false, detail: 'timeout: host command did not finish' },
       }),
     );
@@ -167,6 +177,13 @@ describe('parseHostState', () => {
   it('treats a missing unit as not loaded', () => {
     const s = parseHostState('LoadState=not-found\nActiveState=inactive\nNTPSynchronized=yes\n');
     expect(s).toEqual({ ok: true, timerLoaded: false, timerActive: false, ntpSynchronized: true });
+  });
+
+  it('fails when timedatectl gave no NTP state', () => {
+    expect(parseHostState('LoadState=loaded\nActiveState=active\n').ok).toBe(false);
+    expect(parseHostState('LoadState=loaded\nActiveState=active\nNTPSynchronized=\n').ok).toBe(
+      false,
+    );
   });
 
   it('fails on output without the expected keys', () => {
@@ -207,9 +224,13 @@ describe('reading Signal K', () => {
   it('reads navigation.datetime with the token, following the SSL redirect', async () => {
     fetchSpy
       .mockResolvedValueOnce(res(0, undefined, 'opaqueredirect'))
-      .mockResolvedValueOnce(res(200, { value: iso(0), timestamp: iso(0) }));
+      .mockResolvedValueOnce(res(200, { value: iso(0) }))
+      .mockResolvedValueOnce(res(0, undefined, 'opaqueredirect'))
+      .mockResolvedValueOnce(res(200, { value: iso(1) }));
+    const before = Date.now();
     const gps = await readGpsTime('tok', startProbeDeadline());
-    expect(gps).toEqual({ ok: true, value: iso(0), timestamp: iso(0) });
+    expect(gps).toMatchObject({ ok: true, value: iso(1) });
+    if (gps.ok) expect(gps.observedAt).toBeGreaterThanOrEqual(before);
     expect(fetchSpy.mock.calls[0]?.[0]).toBe(
       'http://sk.test:80/signalk/v1/api/vessels/self/navigation/datetime',
     );
@@ -218,6 +239,50 @@ describe('reading Signal K', () => {
     );
     const init = fetchSpy.mock.calls[1]?.[1] as RequestInit;
     expect(init.headers).toEqual({ authorization: 'Bearer tok' });
+  });
+
+  it('goes straight to HTTPS when HTTP cannot be reached', async () => {
+    fetchSpy
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(res(200, { value: iso(0) }))
+      .mockRejectedValueOnce(new TypeError('fetch failed'))
+      .mockResolvedValueOnce(res(200, { value: iso(1) }));
+    const gps = await readGpsTime('tok', startProbeDeadline());
+    expect(gps).toMatchObject({ ok: true, value: iso(1) });
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
+      'https://sk.test:443/signalk/v1/api/vessels/self/navigation/datetime',
+    );
+  });
+
+  it('does not use GPS time that stops moving', async () => {
+    fetchSpy.mockImplementation(async () => res(200, { value: iso(0) }));
+    const gps = await readGpsTime('tok', startProbeDeadline());
+    expect(gps).toMatchObject({ ok: false, reason: 'stale' });
+  });
+
+  it('times out a body that stalls after the headers', async () => {
+    const prev = process.env.PROBE_TIMEOUT_MS;
+    process.env.PROBE_TIMEOUT_MS = '1000';
+    try {
+      fetchSpy.mockImplementationOnce(async (_url, init) => {
+        const signal = (init as RequestInit).signal;
+        return {
+          status: 200,
+          ok: true,
+          type: 'basic',
+          json: () =>
+            new Promise((_resolve, reject) => {
+              signal?.addEventListener('abort', () => reject(new Error('aborted')));
+            }),
+        } as Response;
+      });
+      const gps = await readGpsTime('tok', startProbeDeadline());
+      expect(gps).toMatchObject({ ok: false, reason: 'unreachable' });
+      if (!gps.ok) expect(gps.detail).toContain('did not send its whole answer');
+    } finally {
+      if (prev === undefined) delete process.env.PROBE_TIMEOUT_MS;
+      else process.env.PROBE_TIMEOUT_MS = prev;
+    }
   });
 
   it('reports no data for a 404', async () => {
