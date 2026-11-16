@@ -25,15 +25,18 @@ export const MAX_OFFSET_S = 30;
 /** GPS time that does not move within this long is not live, so not used. */
 export const LIVE_WAIT_MS = 2500;
 const POLL_MS = 250;
+/** Longest window in which a new GPS time may have reached signalk-server
+ *  for the probe to time it: the offset is off by at most half of it. */
+export const MAX_SPAN_MS = 1000;
 const HOP_TIMEOUT_MS = 3000;
 const DATETIME_PATH = '/signalk/v1/api/vessels/self/navigation/datetime';
 
 export type GpsTime =
-  /** `observedAt` is the host time at which `value` was read. */
+  /** `observedAt` is the host time at which `value` was current. */
   | { ok: true; value: string; observedAt: number }
   | {
       ok: false;
-      reason: 'no-token' | 'no-data' | 'stale' | 'unreachable';
+      reason: 'no-token' | 'no-data' | 'stale' | 'slow' | 'unreachable';
       detail: string;
     };
 
@@ -139,22 +142,33 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null;
 }
 
-async function readDatetime(
-  token: string,
-  deadline: ProbeDeadline,
-): Promise<{ value: string; observedAt: number } | null> {
+interface Reading {
+  value: string;
+  /** Host time when the request was sent, and `performance.now()` then and
+   *  when the answer was read. */
+  sentAt: number;
+  sentPerf: number;
+  readPerf: number;
+}
+
+async function readDatetime(token: string, deadline: ProbeDeadline): Promise<Reading | null> {
+  const sentAt = Date.now();
+  const sentPerf = performance.now();
   const body = await getSignalk(DATETIME_PATH, token, deadline);
-  const observedAt = Date.now();
+  const readPerf = performance.now();
   const value = isRecord(body) ? body.value : undefined;
-  return typeof value === 'string' ? { value, observedAt } : null;
+  return typeof value === 'string' ? { value, sentAt, sentPerf, readPerf } : null;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
 /** Reads navigation.datetime until it changes. Its `timestamp` cannot tell
  *  how old the value is: for RMC it is the GPS time itself, for NMEA 2000 the
- *  host's receive time. A value that moves is live, and was read within one
- *  poll of the moment it was current. */
+ *  host's receive time. A value that changed between two reads reached
+ *  signalk-server after the earlier request was sent and before the later
+ *  answer was read; when that span is short the middle of it is when the
+ *  value was current. The delay from the GPS receiver to signalk-server is
+ *  not measurable here and is left out. */
 export async function readGpsTime(token: string | null, deadline: ProbeDeadline): Promise<GpsTime> {
   if (!token) {
     return { ok: false, reason: 'no-token', detail: `no Signal K token at ${tokenPath()}` };
@@ -167,12 +181,28 @@ export async function readGpsTime(token: string | null, deadline: ProbeDeadline)
   try {
     const first = await readDatetime(token, deadline);
     if (!first) return noData;
+    let prev = first;
+    let changed = false;
     const started = performance.now();
     while (performance.now() - started < LIVE_WAIT_MS && deadline.allows(POLL_MS + MIN_HOP_MS)) {
       await sleep(POLL_MS);
       const next = await readDatetime(token, deadline);
       if (!next) return noData;
-      if (next.value !== first.value) return { ok: true, ...next };
+      if (next.value !== prev.value) {
+        changed = true;
+        const span = next.readPerf - prev.sentPerf;
+        if (span <= MAX_SPAN_MS) {
+          return { ok: true, value: next.value, observedAt: prev.sentAt + span / 2 };
+        }
+      }
+      prev = next;
+    }
+    if (changed) {
+      return {
+        ok: false,
+        reason: 'slow',
+        detail: `Signal K answered too slowly to time GPS within ${MAX_SPAN_MS / 1000} s`,
+      };
     }
     return {
       ok: false,

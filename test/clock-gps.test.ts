@@ -260,6 +260,29 @@ describe('reading Signal K', () => {
     expect(gps).toMatchObject({ ok: false, reason: 'stale' });
   });
 
+  function delayed(ms: number, value: string): () => Promise<Response> {
+    return () => new Promise((r) => setTimeout(() => r(res(200, { value })), ms));
+  }
+
+  it('does not time a change seen through a slow answer', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(res(200, { value: iso(0) }))
+      .mockImplementationOnce(delayed(1200, iso(1)))
+      .mockResolvedValueOnce(res(200, { value: iso(2) }))
+      .mockResolvedValueOnce(res(200, { value: iso(3) }));
+    const before = Date.now();
+    const gps = await readGpsTime('tok', startProbeDeadline());
+    expect(gps).toMatchObject({ ok: true, value: iso(3) });
+    if (gps.ok) expect(gps.observedAt).toBeGreaterThan(before + 1200);
+  });
+
+  it('gives up when every change arrives through a slow answer', async () => {
+    let n = 0;
+    fetchSpy.mockImplementation(() => delayed(1100, iso(n++))());
+    const gps = await readGpsTime('tok', startProbeDeadline());
+    expect(gps).toMatchObject({ ok: false, reason: 'slow' });
+  });
+
   it('times out a body that stalls after the headers', async () => {
     const prev = process.env.PROBE_TIMEOUT_MS;
     process.env.PROBE_TIMEOUT_MS = '1000';
