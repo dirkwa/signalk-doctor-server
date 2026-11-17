@@ -28,6 +28,9 @@ const POLL_MS = 250;
 /** Longest window in which a new GPS time may have reached signalk-server
  *  for the probe to time it: the offset is off by at most half of it. */
 export const MAX_SPAN_MS = 1000;
+/** Wall and monotonic time disagreeing by more than this over one span means
+ *  the host clock was stepped, by signalk-timesync for example. */
+const CLOCK_STEP_MS = 250;
 const HOP_TIMEOUT_MS = 3000;
 const DATETIME_PATH = '/signalk/v1/api/vessels/self/navigation/datetime';
 
@@ -144,9 +147,10 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 
 interface Reading {
   value: string;
-  /** Host time when the request was sent, and `performance.now()` then and
-   *  when the answer was read. */
+  /** Host time when the request was sent and when the answer was read, and
+   *  `performance.now()` at both. */
   sentAt: number;
+  readAt: number;
   sentPerf: number;
   readPerf: number;
 }
@@ -156,8 +160,9 @@ async function readDatetime(token: string, deadline: ProbeDeadline): Promise<Rea
   const sentPerf = performance.now();
   const body = await getSignalk(DATETIME_PATH, token, deadline);
   const readPerf = performance.now();
+  const readAt = Date.now();
   const value = isRecord(body) ? body.value : undefined;
-  return typeof value === 'string' ? { value, sentAt, sentPerf, readPerf } : null;
+  return typeof value === 'string' ? { value, sentAt, readAt, sentPerf, readPerf } : null;
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -191,7 +196,8 @@ export async function readGpsTime(token: string | null, deadline: ProbeDeadline)
       if (next.value !== prev.value) {
         changed = true;
         const span = next.readPerf - prev.sentPerf;
-        if (span <= MAX_SPAN_MS) {
+        const stepped = Math.abs(next.readAt - prev.sentAt - span) > CLOCK_STEP_MS;
+        if (span <= MAX_SPAN_MS && !stepped) {
           return { ok: true, value: next.value, observedAt: prev.sentAt + span / 2 };
         }
       }

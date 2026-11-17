@@ -312,6 +312,29 @@ describe('reading Signal K', () => {
     expect(verdict.status).toBe('ok');
   });
 
+  it('does not time a change across a step of the host clock', async () => {
+    const realNow = Date.now.bind(Date);
+    let shift = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow() + shift);
+    try {
+      fetchSpy
+        .mockResolvedValueOnce(res(200, { value: iso(0) }))
+        .mockImplementationOnce(async () => {
+          shift = 7_200_000;
+          return res(200, { value: iso(1) });
+        })
+        .mockResolvedValueOnce(res(200, { value: iso(2) }))
+        .mockResolvedValueOnce(res(200, { value: iso(3) }));
+      // The probe budget runs on wall time; keep it out of the step.
+      const deadline = { remaining: () => 5000, hop: (w: number) => w, allows: () => true };
+      const gps = await readGpsTime('tok', deadline);
+      expect(gps).toMatchObject({ ok: true, value: iso(3) });
+      if (gps.ok) expect(gps.observedAt).toBeGreaterThan(realNow() + 7_000_000);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('gives up when every change arrives through a slow answer', async () => {
     let n = 0;
     fetchSpy.mockImplementation(() => delayed(1100, iso(n++))());
