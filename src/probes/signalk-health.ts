@@ -54,9 +54,15 @@ function fail(message: string, t0: number): ProbeResult {
  *  of auto-following it into the self-signed HTTPS handshake. `tlsRelaxed`
  *  uses the insecure dispatcher for the HTTPS hop. Rejects with an
  *  operator-readable message rather than undici's `fetch failed`. */
-async function hop(
+export async function hop(
   url: string,
-  opts: { manualRedirect?: boolean; tlsRelaxed?: boolean },
+  opts: {
+    manualRedirect?: boolean;
+    tlsRelaxed?: boolean;
+    headers?: Record<string, string>;
+    /** Aborts the request, including a body read after this resolves. */
+    signal?: AbortSignal;
+  },
   timeoutMs: number,
 ): Promise<Response> {
   const started = Date.now();
@@ -72,9 +78,10 @@ async function hop(
   // method` — Node 24 bundles undici 7.x, so we pin `^7.26.0`.
   type FetchInit = NonNullable<Parameters<typeof fetch>[1]>;
   const init: FetchInit = {
-    signal: controller.signal,
+    signal: opts.signal ? AbortSignal.any([controller.signal, opts.signal]) : controller.signal,
     redirect: opts.manualRedirect ? 'manual' : 'follow',
   };
+  if (opts.headers) init.headers = opts.headers;
   if (opts.tlsRelaxed) init.dispatcher = insecureTls as unknown as FetchInit['dispatcher'];
   try {
     return await fetch(url, init);
@@ -88,7 +95,7 @@ async function hop(
 /** A 3xx, or the `opaqueredirect` (status 0) that `redirect: 'manual'`
  *  yields, both mean signalk-server is redirecting HTTP → HTTPS — i.e.
  *  SSL is enabled. */
-function isRedirect(res: Response): boolean {
+export function isRedirect(res: Response): boolean {
   return res.type === 'opaqueredirect' || (res.status >= 300 && res.status < 400);
 }
 

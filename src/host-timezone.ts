@@ -88,13 +88,17 @@ export function isValidZone(z: string): boolean {
   }
 }
 
-/** Read the host's live IANA timezone via `timedatectl show -p Timezone`
- *  run in the host user session. Returns a categorized failure rather than
- *  throwing so the probe can degrade to `unknown`. */
-export async function readHostTimezone(): Promise<HostTimezoneResult> {
+export type HostShellResult =
+  | { ok: true; stdout: string }
+  | { ok: false; reason: 'timeout' | 'spawn-failed' | 'nonzero-exit'; detail: string };
+
+/** Run `script` with /bin/sh in the host user session (see the header for
+ *  why) and return its stdout, or a categorized failure rather than a throw
+ *  so callers can degrade to `unknown`. */
+export async function runHostShell(script: string): Promise<HostShellResult> {
   // Bound the HOST-side transient unit itself with TimeoutStartSec, not only
   // our client-side timer: a Type=oneshot unit ignores RuntimeMaxSec, so
-  // without this the host timedatectl could keep running after our timer
+  // without this the host command could keep running after our timer
   // fires. Give the host unit the client budget and let our own timer sit a
   // beat longer so we still collect the unit's exit status in the normal case.
   const unitTimeoutSec = Math.max(1, Math.ceil(timeoutMs() / 1000));
@@ -109,14 +113,14 @@ export async function readHostTimezone(): Promise<HostTimezoneResult> {
     '--',
     '/bin/sh',
     '-c',
-    'timedatectl show -p Timezone --value',
+    script,
   ];
   const r = await runSystemdRun(args, timeoutMs() + 1000);
   if (r.code === 'timeout') {
     return {
       ok: false,
       reason: 'timeout',
-      detail: `timedatectl did not finish within ${timeoutMs() + 1000}ms`,
+      detail: `host command did not finish within ${timeoutMs() + 1000}ms`,
     };
   }
   if (r.code === 'spawn-failed') {
@@ -126,7 +130,21 @@ export async function readHostTimezone(): Promise<HostTimezoneResult> {
     return {
       ok: false,
       reason: 'nonzero-exit',
-      detail: `timedatectl exited ${r.exitCode}: ${r.stderr.trim() || '(no stderr)'}`,
+      detail: `exited ${r.exitCode}: ${r.stderr.trim() || '(no stderr)'}`,
+    };
+  }
+  return { ok: true, stdout: r.stdout };
+}
+
+/** Read the host's live IANA timezone via `timedatectl show -p Timezone`
+ *  run in the host user session. */
+export async function readHostTimezone(): Promise<HostTimezoneResult> {
+  const r = await runHostShell('timedatectl show -p Timezone --value');
+  if (!r.ok) {
+    return {
+      ok: false,
+      reason: r.reason,
+      detail: r.reason === 'nonzero-exit' ? `timedatectl ${r.detail}` : r.detail,
     };
   }
   const zone = r.stdout.trim();
